@@ -6,9 +6,15 @@ import requests
 
 st.set_page_config(page_title="ERA Fotode Andmebaas", page_icon="📷", layout="wide")
 
+import os
+
 @st.cache_data
 def load_data():
-    xl = pd.ExcelFile("ERA_fotod_10_03_26_koordinaatidega_v2.xlsx")
+    # Leiab faili alati samast kaustast kui skript ise
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    xlsx_path = os.path.join(base_dir, "ERA_fotod_10_03_26_koordinaatidega_v2.xlsx")
+    
+    xl = pd.ExcelFile(xlsx_path)
     fotod = xl.parse("fotod_koordinaatidega")
     marksoned = xl.parse("märksõnad_pikk")
     kihelkonnad_kp = xl.parse("Kihelkond_keskpunktid")
