@@ -4,6 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import requests
 import os
+import json
 
 st.set_page_config(page_title="ERA Fotode Andmebaas", page_icon="📷", layout="wide")
 
@@ -203,8 +204,29 @@ with tab1:
         ).dropna(subset=["latitude"])
 
         # Lae kihelkonnapiirid sinu enda repost
-        REPO_RAW = "https://raw.githubusercontent.com/katamaria/arhiiv_fotod/main/kih1922_region.json"
-        geojson = load_geojson(REPO_RAW)
+        @st.cache_data
+def load_kihelkond_geojson():
+    path = os.path.join(BASE_DIR, "kih1922_region.json")
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+@st.cache_data
+def load_maakond_geojson():
+    path = os.path.join(BASE_DIR, "maakond.geojson")
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+@st.cache_data
+def load_vald_geojson():
+    path = os.path.join(BASE_DIR, "vald.geojson")
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    return None
 
         if geojson:
             sample_props = geojson["features"][0]["properties"]
