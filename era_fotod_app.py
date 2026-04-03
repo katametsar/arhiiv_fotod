@@ -518,7 +518,8 @@ with tab5:
 
     csv = df_show[show_cols].to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Lae alla CSV", data=csv,
-                       file_name="era_fotod_filteeritud.csv", mime="text/csv")    marksoned = xl.parse("märksõnad_pikk")
+                       file_name="era_fotod_filteeritud.csv", mime="text/csv")    
+    marksoned = xl.parse("märksõnad_pikk")
     isikud = xl.parse("isikud_fotol_pikk")
     kihelkonnad_kp = xl.parse("Kihelkond_keskpunktid")
     fotod['Fotograaf (normaliseeritud)'] = fotod['Fotograaf (puhastatud)'].map(
