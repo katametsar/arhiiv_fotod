@@ -228,7 +228,7 @@ with tab1:
                     return json.load(f)
             return None
     
-        if geojson:
+    if geojson:
             sample_props = geojson["features"][0]["properties"]
             # Proovi leida õige veerg – logi kõik properties debugiks
             nimiveerg = next(
