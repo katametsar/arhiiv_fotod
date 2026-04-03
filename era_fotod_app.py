@@ -203,7 +203,7 @@ with tab1:
         ).dropna(subset=["latitude"])
 
         # Lae kihelkonnapiirid sinu enda repost
-        REPO_RAW = "https://raw.githubusercontent.com/SINU_KASUTAJANIMI/SINU_REPO/main/kih1922_region.json"
+        REPO_RAW = "https://raw.githubusercontent.com/katamaria/arhiiv_fotod/kih1922_region.json"
         geojson = load_geojson(REPO_RAW)
 
         if geojson:
