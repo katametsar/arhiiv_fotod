@@ -752,8 +752,8 @@ with tab1:
                 mapbox_style="open-street-map",
             )
 
-        fig.update_layout(height=520, margin={"r": 0, "t": 40, "l": 0, "b": 0})
-        st.plotly_chart(fig, use_container_width=True)
+    fig.update_layout(height=520, margin={"r": 0, "t": 40, "l": 0, "b": 0})
+    st.plotly_chart(fig, use_container_width=True)
 
         # Kihelkonna detailvaade
         st.subheader("Kihelkonna detailvaade")
