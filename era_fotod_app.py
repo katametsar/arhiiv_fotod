@@ -740,7 +740,7 @@ with tab1:
                 customdata=list(zip(kihel_map["Kihelkond"], kihel_map["Fotode arv"])),
                 showlegend=False,
             ))
-        else:
+    else:
             st.info("ℹ️ Kihelkonnapiiride GeoJSON ei ole kättesaadav – näidatakse mullid. Uuenda REPO_RAW URL koodis.")
             fig = px.scatter_mapbox(
                 kihel_map, lat="latitude", lon="longitude",
