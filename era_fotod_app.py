@@ -12,7 +12,7 @@ import os
 def load_data():
     # Leiab faili alati samast kaustast kui skript ise
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    xlsx_path = os.path.join(base_dir, "ERA_fotod_10_03_26_koordinaatidega_v2.xlsx")
+    xlsx_path = os.path.join(base_dir, "ERA_fotod_10.03.26_koordinaatidega_v2.xlsx")
     
     xl = pd.ExcelFile(xlsx_path)
     fotod = xl.parse("fotod_koordinaatidega")
