@@ -205,29 +205,29 @@ with tab1:
 
         # Lae kihelkonnapiirid sinu enda repost
         @st.cache_data
-def load_kihelkond_geojson():
-    path = os.path.join(BASE_DIR, "kih1922_region.json")
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    return None
-
-@st.cache_data
-def load_maakond_geojson():
-    path = os.path.join(BASE_DIR, "maakond.geojson")
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    return None
-
-@st.cache_data
-def load_vald_geojson():
-    path = os.path.join(BASE_DIR, "vald.geojson")
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    return None
-
+        def load_kihelkond_geojson():
+            path = os.path.join(BASE_DIR, "kih1922_region.json")
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    return json.load(f)
+            return None
+        
+        @st.cache_data
+        def load_maakond_geojson():
+            path = os.path.join(BASE_DIR, "maakond.geojson")
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    return json.load(f)
+            return None
+        
+        @st.cache_data
+        def load_vald_geojson():
+            path = os.path.join(BASE_DIR, "vald.geojson")
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    return json.load(f)
+            return None
+    
         if geojson:
             sample_props = geojson["features"][0]["properties"]
             # Proovi leida õige veerg – logi kõik properties debugiks
