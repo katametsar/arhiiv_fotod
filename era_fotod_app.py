@@ -93,6 +93,10 @@ def get_filtered_df(fotod, marksoned, isikud,
 
 st.sidebar.title("🗂️ Filtrid")
 
+if st.sidebar.button("🔄 Uuenda andmed"):
+    st.cache_data.clear()
+    st.rerun()
+
 asukoha_valik = st.sidebar.radio(
     "Asukoha kuvamise viis",
     ["🏛️ Kihelkonnapõhine (ajalooline)", "📍 Tänapäevane (koordinaadid)"],
@@ -199,7 +203,7 @@ with tab1:
         st.subheader("Fotod kihelkondade kaupa")
 
         # Kasuta kihelkond_kaart veergu kui olemas (puhtam nimi), muidu Kihelkond
-        kihel_veerg = "kihelkond_kaart" if "kihelkond_kaart" in df.columns else "Kihelkond"
+        kihel_veerg = "Kihelkond"
 
         kihel_counts = (
             df[df[kihel_veerg].notna() & ~df[kihel_veerg].isin(["teadmata", "välismaa"])]
