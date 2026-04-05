@@ -35,7 +35,6 @@ def load_data():
         if os.path.exists(path):
             xlsx_path = path
             break
-
     xl = pd.ExcelFile(xlsx_path)
     fotod = xl.parse("fotod_koordinaatidega")
     marksoned = xl.parse("märksõnad_pikk")
@@ -58,6 +57,28 @@ def load_geojson(nimi):
         with open(path, encoding="utf-8") as f:
             return json.load(f)
     return None
+
+def lisa_piirjooned(fig, geojson):
+    """Lisa GeoJSON piirjooned kaardile musta joonena."""
+    for feature in geojson["features"]:
+        geom = feature["geometry"]
+        coords_list = []
+        if geom["type"] == "Polygon":
+            coords_list = [geom["coordinates"][0]]
+        elif geom["type"] == "MultiPolygon":
+            coords_list = [poly[0] for poly in geom["coordinates"]]
+
+        for coords in coords_list:
+            lons = [c[0] for c in coords]
+            lats = [c[1] for c in coords]
+            fig.add_trace(go.Scattermapbox(
+                lon=lons, lat=lats,
+                mode="lines",
+                line=dict(color="black", width=1),
+                hoverinfo="skip",
+                showlegend=False,
+            ))
+    return fig
 
 fotod, marksoned, isikud, kihelkonnad_kp, on_geocoded = load_data()
 
@@ -202,31 +223,36 @@ with tab1:
     if "Kihelkonnapõhine" in asukoha_valik:
         st.subheader("Fotod kihelkondade kaupa")
 
-        # Kasuta kihelkond_kaart veergu kui olemas (puhtam nimi), muidu Kihelkond
-        kihel_veerg = "Kihelkond"
+        # kihelkond_kaart veerus on nimed kujul "Ambla" — kattub GeoJSON-iga
+        kihel_veerg = "kihelkond_kaart" if "kihelkond_kaart" in df.columns else "Kihelkond"
 
         kihel_counts = (
             df[df[kihel_veerg].notna() & ~df[kihel_veerg].isin(["teadmata", "välismaa"])]
             .groupby(kihel_veerg).size().reset_index(name="Fotode arv")
             .rename(columns={kihel_veerg: "Kihelkond"})
         )
+        # Kihelkond_keskpunktid kasutab originaal "Kihelkond" veergu (kujul "Ambla khk.")
+        # seega merge-ime originaalse Kihelkond veeru kaudu
+        kihel_orig = (
+            df[df[kihel_veerg].notna() & df["Kihelkond"].notna()]
+            [[kihel_veerg, "Kihelkond"]].drop_duplicates()
+            .rename(columns={kihel_veerg: "Kihelkond_kaart", "Kihelkond": "Kihelkond_orig"})
+        )
         kihel_map = kihel_counts.merge(
-            kihelkonnad_kp.rename(columns={"Kihelkond või linn": "Kihelkond"}),
+            kihel_orig.rename(columns={"Kihelkond_kaart": "Kihelkond"}),
             on="Kihelkond", how="left"
-        ).dropna(subset=["latitude"])
+        ).merge(
+            kihelkonnad_kp.rename(columns={"Kihelkond või linn": "Kihelkond_orig"}),
+            on="Kihelkond_orig", how="left"
+        )
 
         geojson = load_geojson("kih1922_region.json")
 
         if geojson:
-            sample_props = geojson["features"][0]["properties"]
-            nimiveerg = next(
-                (k for k in sample_props if any(s in k.lower() for s in ["kihel", "nimi", "name", "nm"])),
-                list(sample_props.keys())[0]
-            )
             fig = px.choropleth_mapbox(
                 kihel_map, geojson=geojson,
                 locations="Kihelkond",
-                featureidkey=f"properties.{nimiveerg}",
+                featureidkey="properties.KIHELKOND",
                 color="Fotode arv",
                 color_continuous_scale="YlOrRd",
                 hover_name="Kihelkond",
@@ -235,10 +261,12 @@ with tab1:
                 zoom=6, center={"lat": 58.7, "lon": 25.0}, opacity=0.65,
                 title="Vali kihelkond alt detailvaateks",
             )
+            fig = lisa_piirjooned(fig, geojson)
         else:
             st.info("ℹ️ `kih1922_region.json` ei leitud – näidatakse mullid.")
+            kihel_pts = kihel_map.dropna(subset=["latitude"])
             fig = px.scatter_mapbox(
-                kihel_map, lat="latitude", lon="longitude",
+                kihel_pts, lat="latitude", lon="longitude",
                 size="Fotode arv", color="Fotode arv",
                 hover_name="Kihelkond",
                 hover_data={"Fotode arv": True, "latitude": False, "longitude": False},
@@ -289,12 +317,11 @@ with tab1:
         if not on_geocoded:
             st.warning(
                 "⚠️ Geokodeeritud andmestik puudub. "
-                "Käivita `geocode_lokaalselt.py` oma arvutis ja lae "
-                "`ERA_fotod_piiridega.xlsx` reposse."
+                "Lae `ERA_fotod_piiridega.xlsx` reposse ja vajuta '🔄 Uuenda andmed'."
             )
         else:
-            geojson_vald = load_geojson("vald.geojson")
-            geojson_maakond = load_geojson("maakond.geojson")
+            geojson_maakond = load_geojson("maakond_small.geojson")
+            geojson_vald = load_geojson("omavalitsus_small.geojson")
 
             df_geo = df[df["maakond"].notna() & (df["maakond"] != "")].copy()
 
@@ -324,15 +351,15 @@ with tab1:
             if val_asula != "Kõik":
                 df_map = df_map[df_map["asula"] == val_asula]
 
-            # Üldvaade choropleth — maakonnad kui kõik valitud, vallad kui maakond valitud
+            # Vali GeoJSON ja agg veerg vastavalt valiku tasemele
             if val_maakond == "Kõik":
                 gjson = geojson_maakond
                 agg_veerg = "maakond"
-                nimiveerg_candidates = ["MNIMI", "MAAKOND", "name", "nimi"]
+                nimiveerg_candidates = ["MNIMI"]
             else:
                 gjson = geojson_vald
                 agg_veerg = "vald"
-                nimiveerg_candidates = ["ONIMI", "VALD", "name", "nimi"]
+                nimiveerg_candidates = ["ONIMI"]
 
             if gjson:
                 sample_props = gjson["features"][0]["properties"]
@@ -355,6 +382,7 @@ with tab1:
                     zoom=6, center={"lat": 58.7, "lon": 25.0}, opacity=0.65,
                     title=f"Fotod {'maakondade' if agg_veerg == 'maakond' else 'valdade'} kaupa",
                 )
+                fig = lisa_piirjooned(fig, gjson)
                 fig.update_layout(height=450, margin={"r": 0, "t": 40, "l": 0, "b": 0})
                 st.plotly_chart(fig, use_container_width=True)
 
