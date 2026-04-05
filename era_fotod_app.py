@@ -320,8 +320,8 @@ with tab1:
                 "Lae `ERA_fotod_piiridega.xlsx` reposse ja vajuta '🔄 Uuenda andmed'."
             )
         else:
-            geojson_maakond = load_geojson("maakond_small.geojson")
-            geojson_vald = load_geojson("omavalitsus_small.geojson")
+            geojson_maakond = load_geojson("maakond.geojson")
+            geojson_vald = load_geojson("omavalitsus.geojson")
 
             df_geo = df[df["maakond"].notna() & (df["maakond"] != "")].copy()
 
