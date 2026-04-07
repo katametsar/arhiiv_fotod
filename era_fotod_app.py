@@ -582,7 +582,7 @@ with tab5:
 
     csv = df_show[show_cols].to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Lae alla CSV", data=csv,
-                       file_name="era_fotod_filteeritud.csv", mime="text/csv")            break
+                       file_name="era_fotod_filteeritud.csv", mime="text/csv")            
     xl = pd.ExcelFile(xlsx_path)
     fotod = xl.parse("fotod_koordinaatidega")
     marksoned = xl.parse("märksõnad_pikk")
