@@ -31,7 +31,7 @@ def safe_str_contains(series, text):
 @st.cache_data
 def load_data():
     xlsx_path = None
-    for fname in ["ERA_fotod_1804.xlsx", "ERA_fotod_piiridega.xlsx", "ERA_fotod_geocoded.xlsx"]:
+    for fname in ["ERA_fotod_1804.xlsx"]:
         path = os.path.join(BASE_DIR, fname)
         if os.path.exists(path):
             xlsx_path = path
