@@ -71,11 +71,11 @@ def load_data():
         ensure_column(isikud, col)
 
     if "Fotograaf" in fotod.columns and fotod["Fotograaf"].notna().any():
-        fotod["Fotograaf (normaliseeritud)"] = fotod["Fotograaf"]
+        fotod["Fotograaf"] = fotod["Fotograaf"]
     elif "Fotograaf" in fotod.columns:
-        fotod["Fotograaf (normaliseeritud)"] = fotod["Fotograaf"]
+        fotod["Fotograaf"] = fotod["Fotograaf"]
     else:
-        fotod["Fotograaf (normaliseeritud)"] = pd.NA
+        fotod["Fotograaf"] = pd.NA
 
     # arvulised väljad
     fotod["Aasta"] = pd.to_numeric(fotod["Aasta"], errors="coerce")
@@ -171,8 +171,8 @@ def get_filtered_df(
     if valitud_zanr and "Žanr" in df.columns:
         df = df[df["Žanr"].isin(valitud_zanr)]
 
-    if valitud_fotograaf and "Fotograaf (normaliseeritud)" in df.columns:
-        df = df[df["Fotograaf (normaliseeritud)"].isin(valitud_fotograaf)]
+    if valitud_fotograaf and "Fotograaf" in df.columns:
+        df = df[df["Fotograaf"].isin(valitud_fotograaf)]
 
     if valitud_marksona and not marksoned.empty and "Märksõna" in marksoned.columns:
         if marksona_loogika == "JA – kõik korraga":
@@ -212,7 +212,7 @@ def naita_fotopunkte(df_piirkond, pealkiri, load_geojson_func, lisa_asustus_piir
     hover_data = {
         "Aasta": "Aasta" in df_pts.columns,
         "Kihelkond": "Kihelkond" in df_pts.columns,
-        "Fotograaf (normaliseeritud)": "Fotograaf (normaliseeritud)" in df_pts.columns,
+        "Fotograaf": "Fotograaf" in df_pts.columns,
         "lõplik_latitude": False,
         "lõplik_longitude": False,
     }
@@ -331,8 +331,8 @@ df_ilma_ft_isik = get_filtered_df(
 )
 
 fotograafid_saadaval = (
-    sorted(df_ilma_ft_isik["Fotograaf (normaliseeritud)"].dropna().astype(str).unique().tolist())
-    if "Fotograaf (normaliseeritud)" in df_ilma_ft_isik.columns else []
+    sorted(df_ilma_ft_isik["Fotograaf"].dropna().astype(str).unique().tolist())
+    if "Fotograaf" in df_ilma_ft_isik.columns else []
 )
 valitud_fotograaf = st.sidebar.multiselect(
     "Fotograaf", fotograafid_saadaval, placeholder="Kõik fotograafid"
@@ -485,8 +485,8 @@ with tab1:
 
                 col_kd1, col_kd2 = st.columns(2)
                 with col_kd1:
-                    if "Fotograaf (normaliseeritud)" in df_kihel.columns:
-                        ft = df_kihel["Fotograaf (normaliseeritud)"].value_counts().head(8).reset_index()
+                    if "Fotograaf" in df_kihel.columns:
+                        ft = df_kihel["Fotograaf"].value_counts().head(8).reset_index()
                         if len(ft.columns) == 2:
                             ft.columns = ["Fotograaf", "Arv"]
                         st.markdown("**Fotograafid**")
@@ -635,8 +635,8 @@ with tab2:
                 fig.update_traces(textposition="inside", textinfo="percent+label")
                 st.plotly_chart(fig, use_container_width=True)
 
-        if "Fotograaf (normaliseeritud)" in df.columns:
-            foto_top = df["Fotograaf (normaliseeritud)"].value_counts().head(12).dropna()
+        if "Fotograaf" in df.columns:
+            foto_top = df["Fotograaf"].value_counts().head(12).dropna()
             if len(foto_top) > 0:
                 fig = px.bar(
                     x=foto_top.values,
@@ -776,7 +776,7 @@ with tab5:
     st.subheader("Andmetabel")
     vaikimisi = [
         c for c in [
-            "PID", "Aasta", "Kihelkond", "Fotograaf (normaliseeritud)",
+            "PID", "Aasta", "Kihelkond", "Fotograaf",
             "Žanr", "Sisu kirjeldus", "ERA märksõnad (koondatud)", "failinimi"
         ] if c in df.columns
     ]
@@ -797,8 +797,8 @@ with tab5:
             mask = mask | safe_str_contains(df_show["Sisu kirjeldus"], otsing)
         if "Kihelkond" in df_show.columns:
             mask = mask | safe_str_contains(df_show["Kihelkond"], otsing)
-        if "Fotograaf (normaliseeritud)" in df_show.columns:
-            mask = mask | safe_str_contains(df_show["Fotograaf (normaliseeritud)"], otsing)
+        if "Fotograaf" in df_show.columns:
+            mask = mask | safe_str_contains(df_show["Fotograaf"], otsing)
 
         df_show = df_show[mask]
 
