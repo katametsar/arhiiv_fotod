@@ -364,7 +364,7 @@ c2.metric(
     "Koordinaatidega",
     f"{df['koordinaadid_leitud'].astype(str).eq('jah').sum():,}" if "koordinaadid_leitud" in df.columns else "0"
 )
-c3.metric("Erinevaid kihelkondi", f"{df['Kihelkond'].nunique()}" if "Kihelkond" in df.columns else "0")
+c3.metric("Erinevaid piirkondi", f"{df['Kihelkond'].nunique()}" if "Kihelkond" in df.columns else "0")
 c4.metric(
     "Ajavahemik",
     (
