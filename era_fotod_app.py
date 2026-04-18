@@ -9,26 +9,9 @@ st.set_page_config(page_title="ERA Fotode Andmebaas", page_icon="📷", layout="
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-FOTOGRAAF_MAPPING = {
-    'A. Jaaksoo': 'Aleksander Jaaksoo', 'A. Kiisla': 'August Kiisla',
-    'A. Kitzberg': 'August Kitzberg', 'A. Meikop': 'August Meikop',
-    'A. Saar': 'Ada Saar', 'A. Trumm': 'Avo Trumm',
-    'E. Veskisaar': 'Ellen Veskisaar', 'G. Ränk': 'Gustav Ränk',
-    'H. Kään': 'Heino Kään', 'H. Surva': 'Hugo Surva',
-    'H. Tamm': 'Heldi Tamm', 'H. Tampere': 'Herbert Tampere',
-    'J. Hallikas': 'Johannes Hallikas', 'J. Lepik': 'Johanna Lepik',
-    'J. Mager': 'Julius Mager', 'J. Mikk': 'Johannes Mikk',
-    'J. Mägi': 'Juhan Mägi', 'J. Pääsuke': 'Johannes Pääsuke',
-    'K. Akel': 'Karl Akel', 'K. Grepp': 'Karl Grepp',
-    'K. Mihkelson': 'Kalju Mihkelson', 'K. Raud': 'Kristjan Raud',
-    'P. Voolaine': 'Paulopriit Voolaine', 'R. Koppel': 'Rein Koppel',
-    'R. Ploom': 'Richard Ploom', 'R. Viidalepp': 'Richard Viidalepp',
-    'T. Võimula': 'Tõnu Võimula', 'V. Säägi': 'Vilhelmine Säägi',
-}
-
 @st.cache_data
 def load_data():
-    for fname in ["ERA_fotod_piiridega.xlsx", "ERA_fotod_geocoded.xlsx", "ERA_fotod_10.03.26_koordinaatidega_v2.xlsx"]:
+    for fname in ["ERA_fotod_piiridega.xlsx", "ERA_fotod_geocoded.xlsx", "ERA_fotod_1804.xlsx"]:
         path = os.path.join(BASE_DIR, fname)
         if os.path.exists(path):
             xlsx_path = path
@@ -38,8 +21,8 @@ def load_data():
     marksoned = xl.parse("märksõnad_pikk")
     isikud = xl.parse("isikud_fotol_pikk")
     kihelkonnad_kp = (
-        xl.parse("Kihelkond_keskpunktid")
-        if "Kihelkond_keskpunktid" in xl.sheet_names
+        xl.parse("kihelkond_keskpunktid")
+        if "kihelkond_keskpunktid" in xl.sheet_names
         else pd.DataFrame()
     )
     fotod["Fotograaf (normaliseeritud)"] = fotod["Fotograaf (puhastatud)"].map(
