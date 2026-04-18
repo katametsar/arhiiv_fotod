@@ -9,13 +9,18 @@ st.set_page_config(page_title="ERA Fotode Andmebaas", page_icon="📷", layout="
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-@st.cache_data
+@@st.cache_data
 def load_data():
+    xlsx_path = None
     for fname in ["ERA_fotod_piiridega.xlsx", "ERA_fotod_geocoded.xlsx", "ERA_fotod_1804.xlsx"]:
         path = os.path.join(BASE_DIR, fname)
         if os.path.exists(path):
             xlsx_path = path
             break
+
+    if xlsx_path is None:
+        raise FileNotFoundError("Ühtegi Exceli faili ei leitud.")
+
     xl = pd.ExcelFile(xlsx_path)
     fotod = xl.parse("fotod_koordinaatidega")
     marksoned = xl.parse("märksõnad_pikk")
@@ -25,12 +30,17 @@ def load_data():
         if "kihelkond_keskpunktid" in xl.sheet_names
         else pd.DataFrame()
     )
-    fotod["Fotograaf (normaliseeritud)"] = fotod["Fotograaf (puhastatud)"].map(
-        lambda x: FOTOGRAAF_MAPPING.get(x, x) if pd.notna(x) else x
-    )
+
+    if "Fotograaf (puhastatud)" in fotod.columns:
+        fotod["Fotograaf (normaliseeritud)"] = fotod["Fotograaf (puhastatud)"]
+    elif "Fotograaf" in fotod.columns:
+        fotod["Fotograaf (normaliseeritud)"] = fotod["Fotograaf"]
+    else:
+        fotod["Fotograaf (normaliseeritud)"] = pd.NA
+
     on_geocoded = "maakond" in fotod.columns and fotod["maakond"].notna().any()
     return fotod, marksoned, isikud, kihelkonnad_kp, on_geocoded
-
+    
 @st.cache_data
 def load_geojson(nimi):
     path = os.path.join(BASE_DIR, nimi)
