@@ -50,7 +50,7 @@ def load_data():
     if fotod.empty:
         raise ValueError("Sheet 'fotod_koordinaatidega' puudub või on tühi.")
 
-    # kindlusta vajalikud veerud (aga ära loo Fotograaf veergu kunstlikult ette)
+    # kindlusta vajalikud veerud
     for col in [
         "PID", "Aasta", "Žanr", "Kihelkond", "Sisu kirjeldus", "failinimi",
         "koordinaadid_leitud",
@@ -66,38 +66,18 @@ def load_data():
     for col in ["PID", "Isik"]:
         ensure_column(isikud, col)
 
-    # ── Fotograaf: esmalt fotod sheetilt, vajadusel isikud sheetilt ──
-    fotograaf_source_col = None
-    for candidate in ["Fotograaf", "fotograaf", "Fotograaf (puhastatud)", "fotograaf(puhastatud)"]:
-        if candidate in fotod.columns and fotod[candidate].notna().any():
-            fotograaf_source_col = candidate
-            break
+    # ── Fotograaf: võta isikud_fotol_pikk lehelt, seal on täidetud "Fotograaf" veerg ──
+    # drop_duplicates(PID) et iga foto saaks ühe fotograafi (esimese kirje)
+    foto_map = (
+        isikud[["PID", "Fotograaf"]]
+        .dropna(subset=["Fotograaf"])
+        .drop_duplicates(subset=["PID"])
+    )
+    # eemalda tühi "Fotograaf (puhastatud)" veerg fotodest et vältida segadust
+    if "Fotograaf (puhastatud)" in fotod.columns:
+        fotod.drop(columns=["Fotograaf (puhastatud)"], inplace=True)
 
-    if fotograaf_source_col is not None:
-        fotod["Fotograaf"] = fotod[fotograaf_source_col]
-    else:
-        fotod["Fotograaf"] = pd.NA
-
-    # Kui fotode lehel fotograafi pole või see on tühi, proovi isikute lehelt PID järgi
-    if fotod["Fotograaf"].isna().all():
-        isik_fotograaf_col = None
-        for candidate in ["Fotograaf", "fotograaf", "Fotograaf (puhastatud)", "fotograaf(puhastatud)"]:
-            if candidate in isikud.columns and isikud[candidate].notna().any():
-                isik_fotograaf_col = candidate
-                break
-
-        if isik_fotograaf_col is not None and "PID" in isikud.columns:
-            foto_map = (
-                isikud[["PID", isik_fotograaf_col]]
-                .dropna(subset=[isik_fotograaf_col])
-                .drop_duplicates(subset=["PID"])
-                .rename(columns={isik_fotograaf_col: "Fotograaf_isikud"})
-            )
-
-            fotod = fotod.merge(foto_map, on="PID", how="left")
-            if "Fotograaf_isikud" in fotod.columns:
-                fotod["Fotograaf"] = fotod["Fotograaf"].combine_first(fotod["Fotograaf_isikud"])
-                fotod.drop(columns=["Fotograaf_isikud"], inplace=True)
+    fotod = fotod.merge(foto_map, on="PID", how="left")
 
     # arvulised väljad
     fotod["Aasta"] = pd.to_numeric(fotod["Aasta"], errors="coerce")
@@ -107,7 +87,6 @@ def load_data():
     on_geocoded = "maakond" in fotod.columns and fotod["maakond"].notna().any()
 
     return fotod, marksoned, isikud, kihelkonnad_kp, on_geocoded, os.path.basename(xlsx_path)
-
 
 @st.cache_data
 def load_geojson(nimi):
