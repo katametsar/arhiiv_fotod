@@ -35,7 +35,7 @@ def normalize_text_series(series):
 @st.cache_data
 def load_data():
     xlsx_path = None
-    for fname in ["ERA_fotod_1804.xlsx"]:
+    for fname in ["ERA_fotod_1804.xlsx", "ERA_fotod_piiridega.xlsx", "ERA_fotod_geocoded.xlsx"]:
         path = os.path.join(BASE_DIR, fname)
         if os.path.exists(path):
             xlsx_path = path
@@ -57,7 +57,7 @@ def load_data():
     # kindlusta vajalikud veerud
     for col in [
         "PID", "Aasta", "Žanr", "Kihelkond", "Sisu kirjeldus", "failinimi",
-        "Fotograaf", "Fotograaf (puhastatud)", "koordinaadid_leitud",
+        "Fotograaf", "koordinaadid_leitud",
         "lõplik_latitude", "lõplik_longitude", "lõplik_täpsus",
         "maakond", "vald", "asula", "Projekt", "ERA märksõnad (koondatud)",
         "Isikute arv"
@@ -70,8 +70,8 @@ def load_data():
     for col in ["PID", "Isik"]:
         ensure_column(isikud, col)
 
-    if "Fotograaf (puhastatud)" in fotod.columns and fotod["Fotograaf (puhastatud)"].notna().any():
-        fotod["Fotograaf (normaliseeritud)"] = fotod["Fotograaf (puhastatud)"]
+    if "Fotograaf" in fotod.columns and fotod["Fotograaf"].notna().any():
+        fotod["Fotograaf (normaliseeritud)"] = fotod["Fotograaf"]
     elif "Fotograaf" in fotod.columns:
         fotod["Fotograaf (normaliseeritud)"] = fotod["Fotograaf"]
     else:
