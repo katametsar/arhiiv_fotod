@@ -86,15 +86,19 @@ def load_data():
 
     return fotod, marksoned, isikud, kihelkonnad_kp, on_geocoded
 
-
 @st.cache_data
 def load_geojson(nimi):
     path = os.path.join(BASE_DIR, nimi)
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    return None
 
+    if not os.path.exists(path):
+        return None
+
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            return json.load(f)
+    except Exception as e:
+        st.warning(f"GeoJSON faili '{nimi}' ei saanud laadida: {e}")
+        return None
 
 def extract_polygon_rings(geom):
     if not geom or "type" not in geom or "coordinates" not in geom:
@@ -233,9 +237,10 @@ def naita_fotopunkte(df_piirkond, pealkiri, load_geojson_func, lisa_asustus_piir
 
     fig.update_traces(marker=dict(size=9, opacity=0.8))
 
+
     if lisa_asustus_piirid:
         geojson_ay = load_geojson_func("asustusyksus.geojson")
-        if geojson_ay and "features" in geojson_ay:
+        if isinstance(geojson_ay, dict) and "features" in geojson_ay:
             lat_min = df_pts["lõplik_latitude"].min() - 0.1
             lat_max = df_pts["lõplik_latitude"].max() + 0.1
             lon_min = df_pts["lõplik_longitude"].min() - 0.1
