@@ -28,79 +28,62 @@ def safe_str_contains(series, text):
     return series.fillna("").astype(str).str.contains(text, case=False, na=False)
 
 
-@st.cache_data
-def load_data():
-    xlsx_path = None
-    for fname in ["ERA_fotod_1804.xlsx"]:
-        path = os.path.join(BASE_DIR, fname)
-        if os.path.exists(path):
-            xlsx_path = path
-            break
+def clean_region_name(x):
+    if pd.isna(x):
+        return pd.NA
+    x = str(x).strip()
+    if not x:
+        return pd.NA
+    return x
 
-    if xlsx_path is None:
-        raise FileNotFoundError("Ühtegi Exceli faili ei leitud kaustast.")
 
-    xl = pd.ExcelFile(xlsx_path)
+def normalize_place_name(x):
+    if pd.isna(x):
+        return pd.NA
 
-    fotod = safe_sheet_parse(xl, "fotod_koordinaatidega")
-    marksoned = safe_sheet_parse(xl, "märksõnad_pikk")
-    isikud = safe_sheet_parse(xl, "isikud_fotol_pikk")
-    kihelkonnad_kp = safe_sheet_parse(xl, "kihelkond_keskpunktid")
+    x = str(x).strip()
+    if not x:
+        return pd.NA
 
-    if fotod.empty:
-        raise ValueError("Sheet 'fotod_koordinaatidega' puudub või on tühi.")
+    xl = x.lower()
 
-    # kindlusta vajalikud veerud
-    for col in [
-        "PID", "Aasta", "Žanr", "Kihelkond", "Sisu kirjeldus", "failinimi",
-        "koordinaadid_leitud",
-        "lõplik_latitude", "lõplik_longitude", "lõplik_täpsus",
-        "maakond", "vald", "asula", "Projekt", "ERA märksõnad (koondatud)",
-        "Isikute arv"
-    ]:
-        ensure_column(fotod, col)
+    tallinn_variants = {
+        "tallinn", "tallinna linn", "tallinn linn", "tln", "reval"
+    }
+    tartu_variants = {
+        "tartu", "tartu linn", "tartu linn."
+    }
+    petseri_variants = {
+        "petserimaa", "petseri"
+    }
+    setu_variants = {
+        "setumaa", "setomaa", "setu ala"
+    }
 
-    for col in ["PID", "Märksõna"]:
-        ensure_column(marksoned, col)
+    if xl in tallinn_variants:
+        return "Tallinn"
+    if xl in tartu_variants:
+        return "Tartu"
+    if xl in petseri_variants:
+        return "Petserimaa"
+    if xl in setu_variants:
+        return "Setumaa"
 
-    for col in ["PID", "Isik"]:
-        ensure_column(isikud, col)
+    return x
 
-    # ── Fotograaf: võta isikud_fotol_pikk lehelt, seal on täidetud "Fotograaf" veerg ──
-    # drop_duplicates(PID) et iga foto saaks ühe fotograafi (esimese kirje)
-    foto_map = (
-        isikud[["PID", "Fotograaf"]]
-        .dropna(subset=["Fotograaf"])
-        .drop_duplicates(subset=["PID"])
-    )
-    # eemalda tühi "Fotograaf (puhastatud)" veerg fotodest et vältida segadust
-    if "Fotograaf (puhastatud)" in fotod.columns:
-        fotod.drop(columns=["Fotograaf (puhastatud)"], inplace=True)
 
-    fotod = fotod.merge(foto_map, on="PID", how="left")
+def extract_geojson_feature_names(geojson, prop_name="KIHELKOND"):
+    names = set()
+    if not geojson or "features" not in geojson:
+        return names
 
-    # arvulised väljad
-    fotod["Aasta"] = pd.to_numeric(fotod["Aasta"], errors="coerce")
-    fotod["lõplik_latitude"] = pd.to_numeric(fotod["lõplik_latitude"], errors="coerce")
-    fotod["lõplik_longitude"] = pd.to_numeric(fotod["lõplik_longitude"], errors="coerce")
+    for feature in geojson["features"]:
+        props = feature.get("properties", {})
+        val = props.get(prop_name)
+        if val is not None and str(val).strip():
+            names.add(str(val).strip())
 
-    on_geocoded = "maakond" in fotod.columns and fotod["maakond"].notna().any()
-
-    return fotod, marksoned, isikud, kihelkonnad_kp, on_geocoded, os.path.basename(xlsx_path)
-
-@st.cache_data
-def load_geojson(nimi):
-    path = os.path.join(BASE_DIR, nimi)
-
-    if not os.path.exists(path):
-        return None
-
-    try:
-        with open(path, "r", encoding="utf-8-sig") as f:
-            return json.load(f)
-    except Exception as e:
-        st.warning(f"GeoJSON faili '{nimi}' ei saanud laadida: {e}")
-        return None
+    return names
 
 
 def extract_polygon_rings(geom):
@@ -158,11 +141,41 @@ def lisa_piirjooned(fig, geojson, color="black", width=1):
     return fig
 
 
+def lisa_puuduvad_keskpunktid(fig, df_missing):
+    if df_missing is None or df_missing.empty:
+        return fig
+
+    sizes = df_missing["Fotode arv"].clip(lower=8, upper=40)
+
+    hover_text = (
+        df_missing["kaardi_piirkond"].astype(str)
+        + "<br>Fotode arv: " + df_missing["Fotode arv"].astype(str)
+    )
+
+    fig.add_trace(go.Scattermapbox(
+        lat=df_missing["latitude"],
+        lon=df_missing["longitude"],
+        mode="markers+text",
+        text=df_missing["kaardi_piirkond"],
+        textposition="top center",
+        marker=dict(size=sizes, opacity=0.85),
+        hovertext=hover_text,
+        hoverinfo="text",
+        name="Puuduvad piirkonnad",
+        showlegend=False,
+    ))
+
+    return fig
+
+
 def get_filtered_df(
     fotod, marksoned, isikud,
-    aasta_vahemik, valitud_zanr,
-    valitud_marksona, marksona_loogika,
-    valitud_fotograaf, valitud_isik
+    aasta_vahemik,
+    valitud_zanr,
+    valitud_marksona,
+    marksona_loogika,
+    valitud_fotograaf,
+    valitud_isik
 ):
     df = fotod.copy()
 
@@ -194,6 +207,84 @@ def get_filtered_df(
         df = df[df["PID"].isin(isik_pids)]
 
     return df
+
+
+def get_available_options(
+    fotod, marksoned, isikud,
+    aasta_vahemik,
+    valitud_zanr,
+    valitud_marksona,
+    marksona_loogika,
+    valitud_fotograaf,
+    valitud_isik
+):
+    # ŽANR: kõik muud filtrid peal, žanr ise maas
+    df_for_zanr = get_filtered_df(
+        fotod, marksoned, isikud,
+        aasta_vahemik,
+        [],
+        valitud_marksona, marksona_loogika,
+        valitud_fotograaf, valitud_isik
+    )
+    zanr_opts = sorted(
+        df_for_zanr["Žanr"].dropna().astype(str).unique().tolist()
+    ) if "Žanr" in df_for_zanr.columns else []
+
+    # MÄRKSÕNA: kõik muud filtrid peal, märksõna ise maas
+    df_for_ms = get_filtered_df(
+        fotod, marksoned, isikud,
+        aasta_vahemik,
+        valitud_zanr,
+        [],
+        marksona_loogika,
+        valitud_fotograaf, valitud_isik
+    )
+    pids_ms = set(df_for_ms["PID"].dropna().unique()) if "PID" in df_for_ms.columns else set()
+    ms_opts = (
+        marksoned[marksoned["PID"].isin(pids_ms)]["Märksõna"]
+        .dropna().astype(str).value_counts().index.tolist()
+        if not marksoned.empty and "PID" in marksoned.columns and "Märksõna" in marksoned.columns
+        else []
+    )
+
+    # FOTOGRAAF: kõik muud filtrid peal, fotograaf ise maas
+    df_for_ft = get_filtered_df(
+        fotod, marksoned, isikud,
+        aasta_vahemik,
+        valitud_zanr,
+        valitud_marksona, marksona_loogika,
+        [],
+        valitud_isik
+    )
+    ft_opts = sorted(
+        df_for_ft["Fotograaf"].dropna().astype(str).unique().tolist()
+    ) if "Fotograaf" in df_for_ft.columns else []
+
+    # ISIK: kõik muud filtrid peal, isik ise maas
+    df_for_isik = get_filtered_df(
+        fotod, marksoned, isikud,
+        aasta_vahemik,
+        valitud_zanr,
+        valitud_marksona, marksona_loogika,
+        valitud_fotograaf, []
+    )
+    pids_isik = set(df_for_isik["PID"].dropna().unique()) if "PID" in df_for_isik.columns else set()
+    isik_opts = (
+        isikud[isikud["PID"].isin(pids_isik)]["Isik"]
+        .dropna().astype(str).value_counts().index.tolist()
+        if not isikud.empty and "PID" in isikud.columns and "Isik" in isikud.columns
+        else []
+    )
+
+    return zanr_opts, ms_opts, ft_opts, isik_opts
+
+
+def sanitize_state_list(key, allowed_options, max_n=3):
+    current = st.session_state.get(key, [])
+    if current is None:
+        current = []
+    current = [x for x in current if x in allowed_options][:max_n]
+    st.session_state[key] = current
 
 
 def naita_fotopunkte(df_piirkond, pealkiri, load_geojson_func, lisa_asustus_piirid=False):
@@ -282,7 +373,104 @@ def naita_fotopunkte(df_piirkond, pealkiri, load_geojson_func, lisa_asustus_piir
 
 # ── Andmete laadimine ────────────────────────────────────────────────────────
 
-fotod, marksoned, isikud, kihelkonnad_kp, on_geocoded, aktiivne_fail = load_data()
+@st.cache_data
+def load_data():
+    xlsx_path = None
+    for fname in ["ERA_fotod_1804.xlsx"]:
+        path = os.path.join(BASE_DIR, fname)
+        if os.path.exists(path):
+            xlsx_path = path
+            break
+
+    if xlsx_path is None:
+        raise FileNotFoundError("Ühtegi Exceli faili ei leitud kaustast.")
+
+    xl = pd.ExcelFile(xlsx_path)
+
+    fotod = safe_sheet_parse(xl, "fotod_koordinaatidega")
+    marksoned = safe_sheet_parse(xl, "märksõnad_pikk")
+    isikud = safe_sheet_parse(xl, "isikud_fotol_pikk")
+    kihelkonnad_kp = safe_sheet_parse(xl, "kihelkond_keskpunktid")
+
+    if fotod.empty:
+        raise ValueError("Sheet 'fotod_koordinaatidega' puudub või on tühi.")
+
+    for col in [
+        "PID", "Aasta", "Žanr", "Kihelkond", "Sisu kirjeldus", "failinimi",
+        "koordinaadid_leitud",
+        "lõplik_latitude", "lõplik_longitude", "lõplik_täpsus",
+        "Projekt", "ERA märksõnad (koondatud)", "Isikute arv",
+        "kihelkond_kaart", "Kihelkond või linn"
+    ]:
+        ensure_column(fotod, col)
+
+    for col in ["PID", "Märksõna"]:
+        ensure_column(marksoned, col)
+
+    for col in ["PID", "Isik", "Fotograaf"]:
+        ensure_column(isikud, col)
+
+    # fotograaf isikute lehelt
+    foto_map = (
+        isikud[["PID", "Fotograaf"]]
+        .dropna(subset=["Fotograaf"])
+        .drop_duplicates(subset=["PID"])
+    )
+
+    if "Fotograaf (puhastatud)" in fotod.columns:
+        fotod.drop(columns=["Fotograaf (puhastatud)"], inplace=True)
+
+    fotod = fotod.merge(foto_map, on="PID", how="left")
+
+    fotod["Aasta"] = pd.to_numeric(fotod["Aasta"], errors="coerce")
+    fotod["lõplik_latitude"] = pd.to_numeric(fotod["lõplik_latitude"], errors="coerce")
+    fotod["lõplik_longitude"] = pd.to_numeric(fotod["lõplik_longitude"], errors="coerce")
+
+    # ühtlustatud kaardipiirkond
+    if "kihelkond_kaart" in fotod.columns:
+        fotod["kaardi_piirkond"] = fotod["kihelkond_kaart"].apply(normalize_place_name)
+    else:
+        fotod["kaardi_piirkond"] = pd.NA
+
+    fallback_mask = fotod["kaardi_piirkond"].isna()
+    if "Kihelkond või linn" in fotod.columns:
+        fotod.loc[fallback_mask, "kaardi_piirkond"] = (
+            fotod.loc[fallback_mask, "Kihelkond või linn"].apply(normalize_place_name)
+        )
+
+    fallback_mask = fotod["kaardi_piirkond"].isna()
+    fotod.loc[fallback_mask, "kaardi_piirkond"] = (
+        fotod.loc[fallback_mask, "Kihelkond"].apply(normalize_place_name)
+    )
+
+    if not kihelkonnad_kp.empty:
+        esimene_veerg = kihelkonnad_kp.columns[0]
+        kihelkonnad_kp = kihelkonnad_kp.rename(columns={esimene_veerg: "kaardi_piirkond"})
+        kihelkonnad_kp["kaardi_piirkond"] = kihelkonnad_kp["kaardi_piirkond"].apply(normalize_place_name)
+
+        for col in ["latitude", "longitude"]:
+            if col in kihelkonnad_kp.columns:
+                kihelkonnad_kp[col] = pd.to_numeric(kihelkonnad_kp[col], errors="coerce")
+
+    return fotod, marksoned, isikud, kihelkonnad_kp, os.path.basename(xlsx_path)
+
+
+@st.cache_data
+def load_geojson(nimi):
+    path = os.path.join(BASE_DIR, nimi)
+
+    if not os.path.exists(path):
+        return None
+
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            return json.load(f)
+    except Exception as e:
+        st.warning(f"GeoJSON faili '{nimi}' ei saanud laadida: {e}")
+        return None
+
+
+fotod, marksoned, isikud, kihelkonnad_kp, aktiivne_fail = load_data()
 
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
@@ -293,10 +481,7 @@ if st.sidebar.button("🔄 Uuenda andmed"):
     st.cache_data.clear()
     st.rerun()
 
-asukoha_valik = st.sidebar.radio(
-    "Asukoha kuvamise viis",
-    ["🏛️ Kihelkonnapõhine (ajalooline)", "📍 Tänapäevane (koordinaadid)"],
-)
+st.sidebar.info("Praegu on aktiivne ainult ajalooline kihelkonnapõhine kaart.")
 
 if fotod["Aasta"].notna().any():
     aastad = fotod["Aasta"].dropna().astype(int)
@@ -310,48 +495,130 @@ else:
     aasta_vahemik = (0, 9999)
     st.sidebar.info("Aasta veerus väärtusi ei leitud.")
 
-zanrid = sorted(fotod["Žanr"].dropna().astype(str).unique().tolist()) if "Žanr" in fotod.columns else []
-valitud_zanr = st.sidebar.multiselect("Žanr", zanrid, placeholder="Kõik žanrid")
+# session state algväärtused
+for key in ["valitud_zanr", "valitud_marksona", "valitud_fotograaf", "valitud_isik"]:
+    if key not in st.session_state:
+        st.session_state[key] = []
 
-top_marksoned = (
-    marksoned["Märksõna"].dropna().astype(str).value_counts().head(40).index.tolist()
-    if "Märksõna" in marksoned.columns else []
+if "marksona_loogika_radio" not in st.session_state:
+    st.session_state["marksona_loogika_radio"] = "VÕI – vähemalt üks"
+
+marksona_loogika = st.session_state["marksona_loogika_radio"]
+
+# esimene valikute arvutus
+zanr_opts, ms_opts, ft_opts, isik_opts = get_available_options(
+    fotod, marksoned, isikud,
+    aasta_vahemik,
+    st.session_state["valitud_zanr"],
+    st.session_state["valitud_marksona"],
+    marksona_loogika,
+    st.session_state["valitud_fotograaf"],
+    st.session_state["valitud_isik"],
 )
-valitud_marksona = st.sidebar.multiselect("Märksõna", top_marksoned, placeholder="Kõik märksõnad")
 
-marksona_loogika = "VÕI – vähemalt üks"
-if len(valitud_marksona) > 1:
-    marksona_loogika = st.sidebar.radio(
+sanitize_state_list("valitud_zanr", zanr_opts, max_n=3)
+sanitize_state_list("valitud_marksona", ms_opts, max_n=3)
+sanitize_state_list("valitud_fotograaf", ft_opts, max_n=3)
+sanitize_state_list("valitud_isik", isik_opts, max_n=3)
+
+st.sidebar.multiselect(
+    "Žanr",
+    options=zanr_opts,
+    key="valitud_zanr",
+    max_selections=3,
+    placeholder="Vali kuni 3"
+)
+
+# arvuta uuesti pärast žanrit
+zanr_opts, ms_opts, ft_opts, isik_opts = get_available_options(
+    fotod, marksoned, isikud,
+    aasta_vahemik,
+    st.session_state["valitud_zanr"],
+    st.session_state["valitud_marksona"],
+    st.session_state["marksona_loogika_radio"],
+    st.session_state["valitud_fotograaf"],
+    st.session_state["valitud_isik"],
+)
+
+sanitize_state_list("valitud_marksona", ms_opts, max_n=3)
+
+st.sidebar.multiselect(
+    "Märksõna",
+    options=ms_opts,
+    key="valitud_marksona",
+    max_selections=3,
+    placeholder="Vali kuni 3"
+)
+
+if len(st.session_state["valitud_marksona"]) > 1:
+    st.sidebar.radio(
         "Märksõnade loogika",
         ["VÕI – vähemalt üks", "JA – kõik korraga"],
+        key="marksona_loogika_radio"
     )
 
-df_ilma_ft_isik = get_filtered_df(
+# arvuta uuesti pärast märksõnu
+zanr_opts, ms_opts, ft_opts, isik_opts = get_available_options(
     fotod, marksoned, isikud,
-    aasta_vahemik, valitud_zanr,
-    valitud_marksona, marksona_loogika, [], []
+    aasta_vahemik,
+    st.session_state["valitud_zanr"],
+    st.session_state["valitud_marksona"],
+    st.session_state["marksona_loogika_radio"],
+    st.session_state["valitud_fotograaf"],
+    st.session_state["valitud_isik"],
 )
 
-fotograafid_saadaval = (
-    sorted(df_ilma_ft_isik["Fotograaf"].dropna().astype(str).unique().tolist())
-    if "Fotograaf" in df_ilma_ft_isik.columns else []
-)
-valitud_fotograaf = st.sidebar.multiselect(
-    "Fotograaf", fotograafid_saadaval, placeholder="Kõik fotograafid"
+sanitize_state_list("valitud_fotograaf", ft_opts, max_n=3)
+
+st.sidebar.multiselect(
+    "Fotograaf",
+    options=ft_opts,
+    key="valitud_fotograaf",
+    max_selections=3,
+    placeholder="Vali kuni 3"
 )
 
-pids_ilma_isik = set(df_ilma_ft_isik["PID"].dropna().unique()) if "PID" in df_ilma_ft_isik.columns else set()
-isikud_saadaval = (
-    isikud[isikud["PID"].isin(pids_ilma_isik)]["Isik"].dropna().astype(str).value_counts().head(80).index.tolist()
-    if not isikud.empty and "PID" in isikud.columns and "Isik" in isikud.columns else []
+# arvuta uuesti pärast fotograafi
+zanr_opts, ms_opts, ft_opts, isik_opts = get_available_options(
+    fotod, marksoned, isikud,
+    aasta_vahemik,
+    st.session_state["valitud_zanr"],
+    st.session_state["valitud_marksona"],
+    st.session_state["marksona_loogika_radio"],
+    st.session_state["valitud_fotograaf"],
+    st.session_state["valitud_isik"],
 )
-valitud_isik = st.sidebar.multiselect("Isik pildil", isikud_saadaval, placeholder="Kõik isikud")
+
+sanitize_state_list("valitud_isik", isik_opts, max_n=3)
+
+st.sidebar.multiselect(
+    "Isik pildil",
+    options=isik_opts,
+    key="valitud_isik",
+    max_selections=3,
+    placeholder="Vali kuni 3"
+)
+
+if st.sidebar.button("🧹 Tühjenda kõik filtrid"):
+    for key in ["valitud_zanr", "valitud_marksona", "valitud_fotograaf", "valitud_isik"]:
+        st.session_state[key] = []
+    st.session_state["marksona_loogika_radio"] = "VÕI – vähemalt üks"
+    st.rerun()
+
+valitud_zanr = st.session_state["valitud_zanr"]
+valitud_marksona = st.session_state["valitud_marksona"]
+valitud_fotograaf = st.session_state["valitud_fotograaf"]
+valitud_isik = st.session_state["valitud_isik"]
+marksona_loogika = st.session_state["marksona_loogika_radio"]
 
 df = get_filtered_df(
     fotod, marksoned, isikud,
-    aasta_vahemik, valitud_zanr,
-    valitud_marksona, marksona_loogika,
-    valitud_fotograaf, valitud_isik
+    aasta_vahemik,
+    valitud_zanr,
+    valitud_marksona,
+    marksona_loogika,
+    valitud_fotograaf,
+    valitud_isik
 )
 
 
@@ -367,7 +634,7 @@ c2.metric(
     "Koordinaatidega",
     f"{df['koordinaadid_leitud'].astype(str).eq('jah').sum():,}" if "koordinaadid_leitud" in df.columns else "0"
 )
-c3.metric("Erinevaid piirkondi", f"{df['Kihelkond'].nunique()}" if "Kihelkond" in df.columns else "0")
+c3.metric("Erinevaid piirkondi", f"{df['kaardi_piirkond'].nunique()}" if "kaardi_piirkond" in df.columns else "0")
 c4.metric(
     "Ajavahemik",
     (
@@ -384,212 +651,149 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(
 
 # ══════════════════ TAB 1 – KAART ════════════════════════════════════════════
 with tab1:
-    if "Kihelkonnapõhine" in asukoha_valik:
-        st.subheader("Fotod kihelkondade kaupa")
+    st.subheader("Fotod kihelkondade ja linnade kaupa")
 
-        kihel_veerg = "kihelkond_kaart" if "kihelkond_kaart" in df.columns else "Kihelkond"
+    kihel_veerg = "kaardi_piirkond"
 
-        if kihel_veerg not in df.columns:
-            st.warning("Kihelkonna veerg puudub.")
-        else:
-            kihel_counts = (
-                df[df[kihel_veerg].notna() & ~df[kihel_veerg].astype(str).isin(["teadmata", "välismaa"])]
-                .groupby(kihel_veerg).size().reset_index(name="Fotode arv")
-                .rename(columns={kihel_veerg: "Kihelkond"})
+    if kihel_veerg not in df.columns:
+        st.warning("Kaardipiirkonna veerg puudub.")
+    else:
+        df_map_src = df[
+            df[kihel_veerg].notna() &
+            ~df[kihel_veerg].astype(str).str.lower().isin(["teadmata", "välismaa", "välismaa,"])
+        ].copy()
+
+        kihel_counts = (
+            df_map_src
+            .groupby(kihel_veerg)
+            .size()
+            .reset_index(name="Fotode arv")
+            .rename(columns={kihel_veerg: "kaardi_piirkond"})
+        )
+
+        if not kihelkonnad_kp.empty and {"kaardi_piirkond", "latitude", "longitude"}.issubset(kihelkonnad_kp.columns):
+            kihel_map = kihel_counts.merge(
+                kihelkonnad_kp[["kaardi_piirkond", "latitude", "longitude"]],
+                on="kaardi_piirkond",
+                how="left"
             )
+        else:
+            kihel_map = kihel_counts.copy()
 
-            kihel_orig = (
-                df[df[kihel_veerg].notna() & df["Kihelkond"].notna()]
-                [[kihel_veerg, "Kihelkond"]].drop_duplicates()
-                .rename(columns={kihel_veerg: "Kihelkond_kaart", "Kihelkond": "Kihelkond_orig"})
-            ) if "Kihelkond" in df.columns else pd.DataFrame(columns=["Kihelkond_kaart", "Kihelkond_orig"])
+        geojson = load_geojson("kih1922_region.json")
+        geojson_names = extract_geojson_feature_names(geojson, "KIHELKOND") if geojson else set()
 
-            if not kihelkonnad_kp.empty and "Kihelkond või linn" in kihelkonnad_kp.columns:
-                kihel_map = (
-                    kihel_counts
-                    .merge(
-                        kihel_orig.rename(columns={"Kihelkond_kaart": "Kihelkond"}),
-                        on="Kihelkond", how="left"
-                    )
-                    .merge(
-                        kihelkonnad_kp.rename(columns={"Kihelkond või linn": "Kihelkond_orig"}),
-                        on="Kihelkond_orig", how="left"
-                    )
-                )
-            else:
-                kihel_map = kihel_counts.copy()
+        df_geo = kihel_map[kihel_map["kaardi_piirkond"].isin(geojson_names)].copy()
+        df_missing = kihel_map[
+            ~kihel_map["kaardi_piirkond"].isin(geojson_names) &
+            kihel_map["latitude"].notna() &
+            kihel_map["longitude"].notna()
+        ].copy()
 
-            geojson = load_geojson("kih1922_region.json")
+        if geojson and not df_geo.empty:
+            fig = px.choropleth_mapbox(
+                df_geo,
+                geojson=geojson,
+                locations="kaardi_piirkond",
+                featureidkey="properties.KIHELKOND",
+                color="Fotode arv",
+                color_continuous_scale="YlOrRd",
+                hover_name="kaardi_piirkond",
+                hover_data={"Fotode arv": True},
+                mapbox_style="open-street-map",
+                zoom=6,
+                center={"lat": 58.7, "lon": 25.0},
+                opacity=0.65,
+                title="Vali piirkond alt detailvaateks",
+            )
+            fig = lisa_piirjooned(fig, geojson)
+            fig = lisa_puuduvad_keskpunktid(fig, df_missing)
+            fig.update_layout(height=480, margin={"r": 0, "t": 40, "l": 0, "b": 0})
+            st.plotly_chart(fig, use_container_width=True)
 
-            if geojson and not kihel_map.empty:
-                fig = px.choropleth_mapbox(
-                    kihel_map,
-                    geojson=geojson,
-                    locations="Kihelkond",
-                    featureidkey="properties.KIHELKOND",
+        elif not kihel_map.empty and {"latitude", "longitude"}.issubset(kihel_map.columns):
+            kihel_pts = kihel_map.dropna(subset=["latitude", "longitude"])
+            if not kihel_pts.empty:
+                fig = px.scatter_mapbox(
+                    kihel_pts,
+                    lat="latitude",
+                    lon="longitude",
+                    size="Fotode arv",
                     color="Fotode arv",
+                    hover_name="kaardi_piirkond",
+                    hover_data={"Fotode arv": True, "latitude": False, "longitude": False},
                     color_continuous_scale="YlOrRd",
-                    hover_name="Kihelkond",
-                    hover_data={"Fotode arv": True},
-                    mapbox_style="open-street-map",
+                    size_max=45,
                     zoom=6,
                     center={"lat": 58.7, "lon": 25.0},
-                    opacity=0.65,
-                    title="Vali kihelkond alt detailvaateks",
+                    mapbox_style="open-street-map",
+                    title="Vali piirkond alt detailvaateks",
                 )
-                fig = lisa_piirjooned(fig, geojson)
+                fig.update_traces(text=kihel_pts["kaardi_piirkond"], textposition="top center")
                 fig.update_layout(height=480, margin={"r": 0, "t": 40, "l": 0, "b": 0})
                 st.plotly_chart(fig, use_container_width=True)
-
             else:
-                st.info("Kihelkonna geojsoni ei leitud või kihelkonnaandmeid pole piisavalt.")
-
-                if "latitude" in kihel_map.columns and "longitude" in kihel_map.columns:
-                    kihel_pts = kihel_map.dropna(subset=["latitude", "longitude"])
-                    if not kihel_pts.empty:
-                        fig = px.scatter_mapbox(
-                            kihel_pts,
-                            lat="latitude",
-                            lon="longitude",
-                            size="Fotode arv",
-                            color="Fotode arv",
-                            hover_name="Kihelkond",
-                            hover_data={"Fotode arv": True, "latitude": False, "longitude": False},
-                            color_continuous_scale="YlOrRd",
-                            size_max=45,
-                            zoom=6,
-                            center={"lat": 58.7, "lon": 25.0},
-                            mapbox_style="open-street-map",
-                        )
-                        fig.update_layout(height=480, margin={"r": 0, "t": 40, "l": 0, "b": 0})
-                        st.plotly_chart(fig, use_container_width=True)
-
-            st.subheader("Kihelkonna detailvaade")
-            kihel_valikud = sorted(kihel_map["Kihelkond"].dropna().astype(str).unique().tolist()) if not kihel_map.empty else []
-            val_kihel = st.selectbox("Vali kihelkond", ["—"] + kihel_valikud)
-
-            if val_kihel != "—":
-                df_kihel = df[df[kihel_veerg].astype(str) == val_kihel]
-                k1, k2, k3 = st.columns(3)
-                k1.metric("Fotosid", len(df_kihel))
-                k2.metric(
-                    "Koordinaatidega",
-                    df_kihel["koordinaadid_leitud"].astype(str).eq("jah").sum() if "koordinaadid_leitud" in df_kihel.columns else 0
-                )
-                k3.metric(
-                    "Ajavahemik",
-                    (
-                        f"{int(df_kihel['Aasta'].min()) if df_kihel['Aasta'].notna().any() else '?'}–"
-                        f"{int(df_kihel['Aasta'].max()) if df_kihel['Aasta'].notna().any() else '?'}"
-                    ) if "Aasta" in df_kihel.columns else "?"
-                )
-
-                naita_fotopunkte(df_kihel, f"Fotod – {val_kihel}", load_geojson, lisa_asustus_piirid=True)
-
-                col_kd1, col_kd2 = st.columns(2)
-                with col_kd1:
-                    if "Fotograaf" in df_kihel.columns:
-                        ft = df_kihel["Fotograaf"].value_counts().head(8).reset_index()
-                        if len(ft.columns) == 2:
-                            ft.columns = ["Fotograaf", "Arv"]
-                        st.markdown("**Fotograafid**")
-                        st.dataframe(ft, hide_index=True, use_container_width=True)
-
-                with col_kd2:
-                    if not marksoned.empty and "PID" in marksoned.columns and "Märksõna" in marksoned.columns:
-                        ms_kihel = (
-                            marksoned[marksoned["PID"].isin(df_kihel["PID"])]["Märksõna"]
-                            .value_counts().head(8).reset_index()
-                        )
-                        if len(ms_kihel.columns) == 2:
-                            ms_kihel.columns = ["Märksõna", "Arv"]
-                        st.markdown("**Top märksõnad**")
-                        st.dataframe(ms_kihel, hide_index=True, use_container_width=True)
-
-            st.caption(f"ℹ️ {len(kihel_map)} kihelkonda. 'Teadmata' ja välismaa on välja jäetud.")
-
-    else:
-        st.subheader("Fotod tänapäevase haldusjaotuse järgi")
-
-        if not on_geocoded:
-            st.warning(
-                "⚠️ Geokodeeritud andmestik puudub. "
-                "Lae `ERA_fotod_piiridega.xlsx` reposse ja vajuta '🔄 Uuenda andmed'."
-            )
+                st.info("Kaardi jaoks ei leitud piisavalt piirkonnaandmeid.")
         else:
-            geojson_maakond = load_geojson("maakond.geojson")
-            geojson_vald = load_geojson("omavalitsus.geojson")
+            st.info("Kihelkonna geojsoni ega keskpunktiandmeid ei leitud piisavalt.")
 
-            df_geo = df[df["maakond"].notna() & (df["maakond"].astype(str) != "")].copy()
+        st.subheader("Piirkonna detailvaade")
+        kihel_valikud = sorted(kihel_map["kaardi_piirkond"].dropna().astype(str).unique().tolist()) if not kihel_map.empty else []
+        val_kihel = st.selectbox("Vali piirkond", ["—"] + kihel_valikud)
 
-            maakonnad = sorted([m for m in df_geo["maakond"].dropna().astype(str).unique() if m])
-            col_f1, col_f2, col_f3 = st.columns(3)
+        if val_kihel != "—":
+            df_kihel = df[df[kihel_veerg].astype(str) == val_kihel]
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Fotosid", len(df_kihel))
+            k2.metric(
+                "Koordinaatidega",
+                df_kihel["koordinaadid_leitud"].astype(str).eq("jah").sum() if "koordinaadid_leitud" in df_kihel.columns else 0
+            )
+            k3.metric(
+                "Ajavahemik",
+                (
+                    f"{int(df_kihel['Aasta'].min()) if df_kihel['Aasta'].notna().any() else '?'}–"
+                    f"{int(df_kihel['Aasta'].max()) if df_kihel['Aasta'].notna().any() else '?'}"
+                ) if "Aasta" in df_kihel.columns else "?"
+            )
 
-            with col_f1:
-                val_maakond = st.selectbox("Maakond", ["Kõik"] + maakonnad)
+            naita_fotopunkte(df_kihel, f"Fotod – {val_kihel}", load_geojson, lisa_asustus_piirid=True)
 
-            with col_f2:
-                subset = df_geo if val_maakond == "Kõik" else df_geo[df_geo["maakond"].astype(str) == val_maakond]
-                vallad = sorted([v for v in subset["vald"].dropna().astype(str).unique() if v])
-                val_vald = st.selectbox("Vald", ["Kõik"] + vallad)
+            col_kd1, col_kd2 = st.columns(2)
+            with col_kd1:
+                if "Fotograaf" in df_kihel.columns:
+                    ft = df_kihel["Fotograaf"].value_counts().head(8).reset_index()
+                    if len(ft.columns) == 2:
+                        ft.columns = ["Fotograaf", "Arv"]
+                    st.markdown("**Fotograafid**")
+                    st.dataframe(ft, hide_index=True, use_container_width=True)
 
-            with col_f3:
-                if val_vald != "Kõik":
-                    asulad = sorted([
-                        a for a in df_geo[df_geo["vald"].astype(str) == val_vald]["asula"].dropna().astype(str).unique() if a
-                    ])
-                    val_asula = st.selectbox("Asula / küla", ["Kõik"] + asulad)
-                else:
-                    val_asula = st.selectbox("Asula / küla", ["Kõik"])
+            with col_kd2:
+                if not marksoned.empty and "PID" in marksoned.columns and "Märksõna" in marksoned.columns:
+                    ms_kihel = (
+                        marksoned[marksoned["PID"].isin(df_kihel["PID"])]["Märksõna"]
+                        .value_counts().head(8).reset_index()
+                    )
+                    if len(ms_kihel.columns) == 2:
+                        ms_kihel.columns = ["Märksõna", "Arv"]
+                    st.markdown("**Top märksõnad**")
+                    st.dataframe(ms_kihel, hide_index=True, use_container_width=True)
 
-            df_map = df_geo.copy()
-            if val_maakond != "Kõik":
-                df_map = df_map[df_map["maakond"].astype(str) == val_maakond]
-            if val_vald != "Kõik":
-                df_map = df_map[df_map["vald"].astype(str) == val_vald]
-            if val_asula != "Kõik":
-                df_map = df_map[df_map["asula"].astype(str) == val_asula]
+        puuduvad_nimed = []
+        if not kihel_map.empty and {"latitude", "longitude"}.issubset(kihel_map.columns):
+            puuduvad_nimed = (
+                kihel_map[
+                    kihel_map["latitude"].isna() | kihel_map["longitude"].isna()
+                ]["kaardi_piirkond"]
+                .dropna()
+                .astype(str)
+                .tolist()
+            )
 
-            if val_maakond == "Kõik":
-                gjson = geojson_maakond
-                agg_veerg = "maakond"
-                nimiveerg = "MNIMI"
-            else:
-                gjson = geojson_vald
-                agg_veerg = "vald"
-                nimiveerg = "ONIMI"
-
-            if gjson and not df_map.empty:
-                agg = df_map.groupby(agg_veerg).size().reset_index(name="Fotode arv")
-                fig = px.choropleth_mapbox(
-                    agg,
-                    geojson=gjson,
-                    locations=agg_veerg,
-                    featureidkey=f"properties.{nimiveerg}",
-                    color="Fotode arv",
-                    color_continuous_scale="Blues",
-                    hover_name=agg_veerg,
-                    mapbox_style="open-street-map",
-                    zoom=6,
-                    center={"lat": 58.7, "lon": 25.0},
-                    opacity=0.65,
-                    title=f"Fotod {'maakondade' if agg_veerg == 'maakond' else 'valdade'} kaupa",
-                )
-                fig = lisa_piirjooned(fig, gjson)
-                fig.update_layout(height=450, margin={"r": 0, "t": 40, "l": 0, "b": 0})
-                st.plotly_chart(fig, use_container_width=True)
-
-            if val_maakond != "Kõik" or val_vald != "Kõik":
-                piirkond_nimi = (
-                    val_asula if val_asula != "Kõik"
-                    else val_vald if val_vald != "Kõik"
-                    else val_maakond
-                )
-                naita_fotopunkte(df_map, f"Fotod – {piirkond_nimi}", load_geojson)
-            elif not gjson:
-                naita_fotopunkte(df_map, "Kõik koordinaatidega fotod", load_geojson)
-
-            st.caption(f"ℹ️ Filtreeritud: {len(df_map):,} fotot")
+        if puuduvad_nimed:
+            st.caption("⚠️ Keskpunkt puudub: " + ", ".join(sorted(puuduvad_nimed[:20])) + (" ..." if len(puuduvad_nimed) > 20 else ""))
+        else:
+            st.caption(f"ℹ️ Kaardil on {len(kihel_map)} piirkonda. Geojsonist puudu olevad piirkonnad lisatakse keskpunktmarkeritena.")
 
 
 # ══════════════════ TAB 2 – STATISTIKA ═══════════════════════════════════════
@@ -612,9 +816,9 @@ with tab2:
             fig.update_layout(coloraxis_showscale=False)
             st.plotly_chart(fig, use_container_width=True)
 
-        if "Kihelkond" in df.columns:
+        if "kaardi_piirkond" in df.columns:
             kihel_top = (
-                df[df["Kihelkond"].notna() & ~df["Kihelkond"].astype(str).isin(["teadmata", "välismaa"])]["Kihelkond"]
+                df[df["kaardi_piirkond"].notna() & ~df["kaardi_piirkond"].astype(str).str.lower().isin(["teadmata", "välismaa", "välismaa,"])]["kaardi_piirkond"]
                 .value_counts().head(15)
             )
             if len(kihel_top) > 0:
@@ -622,8 +826,8 @@ with tab2:
                     x=kihel_top.values,
                     y=kihel_top.index,
                     orientation="h",
-                    labels={"x": "Fotode arv", "y": "Kihelkond"},
-                    title="Top 15 kihelkonda",
+                    labels={"x": "Fotode arv", "y": "Piirkond"},
+                    title="Top 15 piirkonda",
                     color=kihel_top.values,
                     color_continuous_scale="Greens",
                 )
@@ -755,7 +959,7 @@ with tab4:
             df_isik = df[df["PID"].isin(isik_matches["PID"].unique())]
             st.markdown(f"Leitud **{len(df_isik)}** fotot isikuga '{isik_otsing}'")
             if len(df_isik) > 0:
-                cols = [c for c in ["PID", "Aasta", "Kihelkond", "Sisu kirjeldus", "failinimi"] if c in df_isik.columns]
+                cols = [c for c in ["PID", "Aasta", "Kihelkond", "kaardi_piirkond", "Sisu kirjeldus", "failinimi"] if c in df_isik.columns]
                 st.dataframe(df_isik[cols].head(50), use_container_width=True, hide_index=True)
         else:
             st.markdown("#### Isikute arv fotol")
@@ -779,7 +983,7 @@ with tab5:
     st.subheader("Andmetabel")
     vaikimisi = [
         c for c in [
-            "PID", "Aasta", "Kihelkond", "Fotograaf",
+            "PID", "Aasta", "Kihelkond", "kaardi_piirkond", "Fotograaf",
             "Žanr", "Sisu kirjeldus", "ERA märksõnad (koondatud)", "failinimi"
         ] if c in df.columns
     ]
@@ -800,6 +1004,8 @@ with tab5:
             mask = mask | safe_str_contains(df_show["Sisu kirjeldus"], otsing)
         if "Kihelkond" in df_show.columns:
             mask = mask | safe_str_contains(df_show["Kihelkond"], otsing)
+        if "kaardi_piirkond" in df_show.columns:
+            mask = mask | safe_str_contains(df_show["kaardi_piirkond"], otsing)
         if "Fotograaf" in df_show.columns:
             mask = mask | safe_str_contains(df_show["Fotograaf"], otsing)
 
