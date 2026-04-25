@@ -376,7 +376,7 @@ def naita_fotopunkte(df_piirkond, pealkiri, load_geojson_func, lisa_asustus_piir
 @st.cache_data
 def load_data():
     xlsx_path = None
-    for fname in ["ERA_fotod_1804.xlsx"]:
+    for fname in ["era_fotod_250426.xlsx"]:
         path = os.path.join(BASE_DIR, fname)
         if os.path.exists(path):
             xlsx_path = path
