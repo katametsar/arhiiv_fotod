@@ -403,8 +403,8 @@ def load_data():
 
     # ühtlusta koordinaadiveerud fotode tabelis
     fotod = fotod.rename(columns={
-        "latitude": "latitude",
-        "longitude": "longitude",
+        "Latitude": "latitude",
+        "Longitude": "longitude",
         "lat": "latitude",
         "lon": "longitude",
         "long": "longitude",
@@ -414,8 +414,8 @@ def load_data():
 
     # ühtlusta keskpunktide tabelis
     kihelkonnad_kp = kihelkonnad_kp.rename(columns={
-        "latitude": "latitude",
-        "longitude": "longitude",
+        "Latitude": "latitude",
+        "Longitude": "longitude",
         "lat": "latitude",
         "lon": "longitude",
         "long": "longitude",
@@ -510,6 +510,7 @@ def load_data():
             kihelkonnad_kp[col] = pd.to_numeric(kihelkonnad_kp[col], errors="coerce")
 
     return fotod, marksoned, isikud, kihelkonnad_kp, os.path.basename(xlsx_path)
+
 
 @st.cache_data
 def load_geojson(nimi):
