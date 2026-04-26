@@ -48,7 +48,7 @@ def normalize_place_name(x):
     xl = x.lower()
 
     tallinn_variants = {
-        "tallinn", "tallinna linn", "tallinn linn", "tln", "reval"
+        "tallinn", "tallinna linn", "tallinn linn"
     }
     tartu_variants = {
         "tartu", "tartu linn", "tartu linn."
@@ -288,15 +288,15 @@ def sanitize_state_list(key, allowed_options, max_n=3):
 
 
 def naita_fotopunkte(df_piirkond, pealkiri, load_geojson_func, lisa_asustus_piirid=False):
-    required = ["lõplik_latitude", "lõplik_longitude"]
+    required = ["Latitude", "Longitude"]
     for col in required:
         if col not in df_piirkond.columns:
             st.info("Koordinaadiveerud puuduvad.")
             return
 
     df_pts = df_piirkond[
-        df_piirkond["lõplik_latitude"].notna() &
-        df_piirkond["lõplik_longitude"].notna()
+        df_piirkond["Latitude"].notna() &
+        df_piirkond["Longitude"].notna()
     ].copy()
 
     if df_pts.empty:
@@ -307,16 +307,16 @@ def naita_fotopunkte(df_piirkond, pealkiri, load_geojson_func, lisa_asustus_piir
         "Aasta": "Aasta" in df_pts.columns,
         "Kihelkond": "Kihelkond" in df_pts.columns,
         "Fotograaf": "Fotograaf" in df_pts.columns,
-        "lõplik_latitude": False,
-        "lõplik_longitude": False,
+        "Latitude": False,
+        "Longitude": False,
     }
 
     color_col = "lõplik_täpsus" if "lõplik_täpsus" in df_pts.columns else None
 
     fig = px.scatter_mapbox(
         df_pts,
-        lat="lõplik_latitude",
-        lon="lõplik_longitude",
+        lat="Latitude",
+        lon="Longitude",
         hover_name="Sisu kirjeldus" if "Sisu kirjeldus" in df_pts.columns else None,
         hover_data=hover_data,
         color=color_col,
@@ -324,8 +324,8 @@ def naita_fotopunkte(df_piirkond, pealkiri, load_geojson_func, lisa_asustus_piir
         title=pealkiri,
         zoom=9,
         center={
-            "lat": df_pts["lõplik_latitude"].mean(),
-            "lon": df_pts["lõplik_longitude"].mean(),
+            "lat": df_pts["Latitude"].mean(),
+            "lon": df_pts["Longitude"].mean(),
         },
     )
 
@@ -334,10 +334,10 @@ def naita_fotopunkte(df_piirkond, pealkiri, load_geojson_func, lisa_asustus_piir
     if lisa_asustus_piirid:
         geojson_ay = load_geojson_func("asustusyksus.geojson")
         if isinstance(geojson_ay, dict) and "features" in geojson_ay:
-            lat_min = df_pts["lõplik_latitude"].min() - 0.1
-            lat_max = df_pts["lõplik_latitude"].max() + 0.1
-            lon_min = df_pts["lõplik_longitude"].min() - 0.1
-            lon_max = df_pts["lõplik_longitude"].max() + 0.1
+            lat_min = df_pts["Latitude"].min() - 0.1
+            lat_max = df_pts["Latitude"].max() + 0.1
+            lon_min = df_pts["Longitude"].min() - 0.1
+            lon_max = df_pts["Longitude"].max() + 0.1
 
             for feature in geojson_ay["features"]:
                 geom = feature.get("geometry", {})
@@ -398,7 +398,7 @@ def load_data():
     for col in [
         "PID", "Aasta", "Žanr", "Kihelkond", "Sisu kirjeldus", "failinimi",
         "koordinaadid_leitud",
-        "lõplik_latitude", "lõplik_longitude", "lõplik_täpsus",
+        "Latitude", "Longitude",
         "Projekt", "ERA märksõnad (koondatud)", "Isikute arv",
         "kihelkond_kaart", "Kihelkond või linn"
     ]:
@@ -423,8 +423,8 @@ def load_data():
     fotod = fotod.merge(foto_map, on="PID", how="left")
 
     fotod["Aasta"] = pd.to_numeric(fotod["Aasta"], errors="coerce")
-    fotod["lõplik_latitude"] = pd.to_numeric(fotod["lõplik_latitude"], errors="coerce")
-    fotod["lõplik_longitude"] = pd.to_numeric(fotod["lõplik_longitude"], errors="coerce")
+    fotod["Latitude"] = pd.to_numeric(fotod["Latitude"], errors="coerce")
+    fotod["Longitude"] = pd.to_numeric(fotod["Longitude"], errors="coerce")
 
     # ühtlustatud kaardipiirkond
     if "kihelkond_kaart" in fotod.columns:
@@ -448,7 +448,7 @@ def load_data():
         kihelkonnad_kp = kihelkonnad_kp.rename(columns={esimene_veerg: "kaardi_piirkond"})
         kihelkonnad_kp["kaardi_piirkond"] = kihelkonnad_kp["kaardi_piirkond"].apply(normalize_place_name)
 
-        for col in ["latitude", "longitude"]:
+        for col in ["Latitude", "Longitude"]:
             if col in kihelkonnad_kp.columns:
                 kihelkonnad_kp[col] = pd.to_numeric(kihelkonnad_kp[col], errors="coerce")
 
@@ -671,9 +671,9 @@ with tab1:
             .rename(columns={kihel_veerg: "kaardi_piirkond"})
         )
 
-        if not kihelkonnad_kp.empty and {"kaardi_piirkond", "latitude", "longitude"}.issubset(kihelkonnad_kp.columns):
+        if not kihelkonnad_kp.empty and {"kaardi_piirkond", "Latitude", "Longitude"}.issubset(kihelkonnad_kp.columns):
             kihel_map = kihel_counts.merge(
-                kihelkonnad_kp[["kaardi_piirkond", "latitude", "longitude"]],
+                kihelkonnad_kp[["kaardi_piirkond", "Latitude", "Longitude"]],
                 on="kaardi_piirkond",
                 how="left"
             )
@@ -686,8 +686,8 @@ with tab1:
         df_geo = kihel_map[kihel_map["kaardi_piirkond"].isin(geojson_names)].copy()
         df_missing = kihel_map[
             ~kihel_map["kaardi_piirkond"].isin(geojson_names) &
-            kihel_map["latitude"].notna() &
-            kihel_map["longitude"].notna()
+            kihel_map["Latitude"].notna() &
+            kihel_map["Longitude"].notna()
         ].copy()
 
         if geojson and not df_geo.empty:
@@ -711,17 +711,17 @@ with tab1:
             fig.update_layout(height=480, margin={"r": 0, "t": 40, "l": 0, "b": 0})
             st.plotly_chart(fig, use_container_width=True)
 
-        elif not kihel_map.empty and {"latitude", "longitude"}.issubset(kihel_map.columns):
-            kihel_pts = kihel_map.dropna(subset=["latitude", "longitude"])
+        elif not kihel_map.empty and {"Latitude", "Longitude"}.issubset(kihel_map.columns):
+            kihel_pts = kihel_map.dropna(subset=["Latitude", "Longitude"])
             if not kihel_pts.empty:
                 fig = px.scatter_mapbox(
                     kihel_pts,
-                    lat="latitude",
-                    lon="longitude",
+                    lat="Latitude",
+                    lon="Longitude",
                     size="Fotode arv",
                     color="Fotode arv",
                     hover_name="kaardi_piirkond",
-                    hover_data={"Fotode arv": True, "latitude": False, "longitude": False},
+                    hover_data={"Fotode arv": True, "Latitude": False, "Longitude": False},
                     color_continuous_scale="YlOrRd",
                     size_max=45,
                     zoom=6,
