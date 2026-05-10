@@ -212,6 +212,9 @@ def lisa_puuduvad_keskpunktid(fig, df_missing):
 
 
 def split_categories(series):
+    """Jagab kategooriavälja päris üksikkategooriateks.
+    Talub koma, semikoolonit ja püstkriipsu. Nii ei teki filtrisse 100 eri kombinatsiooni.
+    """
     if series is None or len(series) == 0:
         return pd.Series(dtype="object")
 
@@ -219,6 +222,8 @@ def split_categories(series):
         series
         .dropna()
         .astype(str)
+        .str.replace(";", ",", regex=False)
+        .str.replace("|", ",", regex=False)
         .str.split(",")
         .explode()
         .str.strip()
@@ -234,10 +239,47 @@ def filter_by_comma_categories(df, col, selected):
     selected_lower = {str(x).strip().lower() for x in selected if str(x).strip()}
 
     def has_any_category(value):
-        cats = [c.strip().lower() for c in str(value).split(",") if c.strip()]
+        text = str(value).replace(";", ",").replace("|", ",")
+        cats = [c.strip().lower() for c in text.split(",") if c.strip()]
         return any(c in selected_lower for c in cats)
 
     return df[df[col].fillna("").apply(has_any_category)]
+
+
+def keyword_category_map_from_ml(ml_marksonad):
+    """Tagastab tabeli: Märksõna -> Märksõna kategooria.
+    Vajalik selleks, et kasutaja saaks valida nt kategooria 'inimene'
+    ja selle all näha ainult selle kategooria päris märksõnu.
+    """
+    if ml_marksonad is None or ml_marksonad.empty:
+        return pd.DataFrame(columns=["Märksõna", "Märksõna kategooria"])
+
+    df_map = ml_marksonad.copy()
+    df_map.columns = df_map.columns.astype(str).str.strip()
+
+    # Kõige tõenäolisem vorm: pikk mapping märksõna -> klaster/kategooria.
+    keyword_col = None
+    for c in ["Märksõna", "märksõna", "marksona", "keyword"]:
+        if c in df_map.columns:
+            keyword_col = c
+            break
+
+    category_col = None
+    for c in ["Märksõna2", "märksõna2", "klaster", "klastrid", "Märksõna kategooria", "kategooria"]:
+        if c in df_map.columns:
+            category_col = c
+            break
+
+    if keyword_col and category_col:
+        out = df_map[[keyword_col, category_col]].copy()
+        out.columns = ["Märksõna", "Märksõna kategooria"]
+        out = out.dropna()
+        out["Märksõna"] = out["Märksõna"].astype(str).str.strip()
+        out["Märksõna kategooria"] = out["Märksõna kategooria"].astype(str).str.strip()
+        out = out[(out["Märksõna"] != "") & (out["Märksõna kategooria"] != "")]
+        return out.drop_duplicates()
+
+    return pd.DataFrame(columns=["Märksõna", "Märksõna kategooria"])
 
 
 def category_match(row, manual_col="Märksõna kategooria", pred_cols=None):
@@ -368,12 +410,17 @@ def get_available_options(
         valitud_marksona_kategooria
     )
     pids_ms = set(df_for_ms["PID"].dropna().unique()) if "PID" in df_for_ms.columns else set()
-    ms_opts = (
-        marksoned[marksoned["PID"].isin(pids_ms)]["Märksõna"]
-        .dropna().astype(str).value_counts().index.tolist()
-        if not marksoned.empty and "PID" in marksoned.columns and "Märksõna" in marksoned.columns
-        else []
-    )
+
+    if not marksoned.empty and "PID" in marksoned.columns and "Märksõna" in marksoned.columns:
+        ms_source = marksoned[marksoned["PID"].isin(pids_ms)].copy()
+
+        # Kui kategooria on valitud, näita märksõna filtris ainult selle kategooria märksõnu.
+        if valitud_marksona_kategooria and "Märksõna kategooria" in ms_source.columns:
+            ms_source = ms_source[ms_source["Märksõna kategooria"].isin(valitud_marksona_kategooria)]
+
+        ms_opts = ms_source["Märksõna"].dropna().astype(str).value_counts().index.tolist()
+    else:
+        ms_opts = []
 
     # MÄRKSÕNA KATEGOORIA: kõik muud filtrid peal, kategooria ise maas
     df_for_mk = get_filtered_df(
@@ -384,7 +431,12 @@ def get_available_options(
         valitud_fotograaf, valitud_isik,
         []
     )
-    mk_opts = sorted(split_categories(df_for_mk["Märksõna kategooria"]).unique().tolist()) if "Märksõna kategooria" in df_for_mk.columns else []
+    if not marksoned.empty and "Märksõna kategooria" in marksoned.columns:
+        pids_mk = set(df_for_mk["PID"].dropna().unique()) if "PID" in df_for_mk.columns else set()
+        mk_source = marksoned[marksoned["PID"].isin(pids_mk)].copy()
+        mk_opts = sorted(mk_source["Märksõna kategooria"].dropna().astype(str).str.strip().unique().tolist())
+    else:
+        mk_opts = sorted(split_categories(df_for_mk["Märksõna kategooria"]).unique().tolist()) if "Märksõna kategooria" in df_for_mk.columns else []
 
     # FOTOGRAAF: kõik muud filtrid peal, fotograaf ise maas
     df_for_ft = get_filtered_df(
@@ -552,9 +604,11 @@ def load_data():
 
     ml_marksonad = read_first_existing_sheet(
         ml_marksonad_path,
-        preferred_sheets=["ml_foto_klastrid", "märksõnad_pikk", "ml_multihot_klastrid"],
-        required_cols=["klastrid", "Märksõna2"]
+        preferred_sheets=["märksõnad_pikk", "ml_foto_klastrid", "ml_multihot_klastrid"],
+        required_cols=["Märksõna2", "klastrid"]
     )
+
+    marksona_kategooriad_map = keyword_category_map_from_ml(ml_marksonad)
 
     ml_clip = read_first_existing_sheet(
         ml_clip_path,
@@ -696,6 +750,15 @@ def load_data():
 
     for col in ["PID", "Märksõna"]:
         ensure_column(marksoned, col)
+
+    # Lisa tavalistele märksõnadele juurde nende 19 kategooria mapping.
+    # See võimaldab sidebaris: 1) valida kategooria, 2) valida selle kategooria all ainult vastavaid märksõnu.
+    if not marksona_kategooriad_map.empty and "Märksõna" in marksoned.columns:
+        if "Märksõna kategooria" in marksoned.columns:
+            marksoned = marksoned.drop(columns=["Märksõna kategooria"])
+        marksoned = marksoned.merge(marksona_kategooriad_map, on="Märksõna", how="left")
+    else:
+        ensure_column(marksoned, "Märksõna kategooria")
 
     for col in ["PID", "Isik", "Fotograaf"]:
         ensure_column(isikud, col)
@@ -853,6 +916,9 @@ st.sidebar.multiselect(
     max_selections=3,
     placeholder="Vali kuni 3"
 )
+
+if valitud_marksona_kategooria and len(ms_opts) > 0:
+    st.sidebar.caption("Märksõnade valik on kitsendatud valitud kategooria järgi.")
 
 if len(st.session_state["valitud_marksona"]) > 1:
     st.sidebar.radio(
@@ -1335,6 +1401,7 @@ with tab5:
         c1.metric("Fotosid filtris", f"{len(ml_df):,}")
         c2.metric("CLIP ennustusega", f"{ml_df['pred_top1'].notna().sum():,}" if "pred_top1" in ml_df.columns else "0")
         c3.metric("Käsitsi kategooriaga", f"{ml_df['Märksõna kategooria'].notna().sum():,}" if "Märksõna kategooria" in ml_df.columns else "0")
+        st.caption("Need arvud ei peagi olema samad: CLIP ennustused on ainult hindamiseks käsitsi kategooriaga piltidel, ülejäänud fotodel võib olla originaalmärksõnu, aga mitte 19-kategooria käsitsi klastrit.")
         c4.metric(
             "Keskmine top1–top2 vahe",
             f"{ml_df['confidence_margin_top1_top2'].mean():.3f}" if "confidence_margin_top1_top2" in ml_df.columns and ml_df["confidence_margin_top1_top2"].notna().any() else "?"
@@ -1384,6 +1451,7 @@ with tab5:
 
         if has_clip and has_manual:
             st.markdown("### Kui tihti CLIP kattub käsitsi kategooriaga?")
+            st.warning("Kui kattuvus on siin väga madal, siis kõige tõenäolisem põhjus ei ole mudel, vaid kategoorianimede/andmeveeru sobimatus: CLIP-i `pred_top1` peab olema täpselt samas 19 kategooria sõnastikus nagu käsitsi `Märksõna kategooria`.")
 
             eval_df = ml_df[ml_df["pred_top1"].notna() & ml_df["Märksõna kategooria"].notna()].copy()
 
@@ -1396,6 +1464,19 @@ with tab5:
                 m1.metric("Top1 kattuvus", f"{eval_df['top1_kattub'].mean() * 100:.1f}%")
                 m2.metric("Top3 kattuvus", f"{eval_df['top3_kattub'].mean() * 100:.1f}%")
                 m3.metric("Top5 kattuvus", f"{eval_df['top5_kattub'].mean() * 100:.1f}%")
+
+                with st.expander("Kontrolli kategoorianimede kattumist"):
+                    manual_set = sorted(split_categories(eval_df["Märksõna kategooria"]).dropna().astype(str).unique().tolist())
+                    pred_set = sorted(pd.concat([
+                        eval_df[c].dropna().astype(str) for c in ["pred_top1", "pred_top2", "pred_top3", "pred_top4", "pred_top5"] if c in eval_df.columns
+                    ]).dropna().astype(str).unique().tolist())
+                    col_x, col_y = st.columns(2)
+                    with col_x:
+                        st.markdown("**Käsitsi kategooriad**")
+                        st.write(manual_set)
+                    with col_y:
+                        st.markdown("**CLIP kategooriad**")
+                        st.write(pred_set)
 
                 match_counts = eval_df["top3_kattub"].map({True: "Top3 seas kattub", False: "Top3 seas ei kattu"}).value_counts()
                 fig = px.pie(
