@@ -168,6 +168,35 @@ def lisa_puuduvad_keskpunktid(fig, df_missing):
     return fig
 
 
+def split_categories(series):
+    if series is None or len(series) == 0:
+        return pd.Series(dtype="object")
+
+    return (
+        series
+        .dropna()
+        .astype(str)
+        .str.split(",")
+        .explode()
+        .str.strip()
+        .replace("", pd.NA)
+        .dropna()
+    )
+
+
+def filter_by_comma_categories(df, col, selected):
+    if not selected or col not in df.columns:
+        return df
+
+    selected_lower = {str(x).strip().lower() for x in selected if str(x).strip()}
+
+    def has_any_category(value):
+        cats = [c.strip().lower() for c in str(value).split(",") if c.strip()]
+        return any(c in selected_lower for c in cats)
+
+    return df[df[col].fillna("").apply(has_any_category)]
+
+
 def get_filtered_df(
     fotod, marksoned, isikud,
     aasta_vahemik,
@@ -175,7 +204,8 @@ def get_filtered_df(
     valitud_marksona,
     marksona_loogika,
     valitud_fotograaf,
-    valitud_isik
+    valitud_isik,
+    valitud_marksona_kategooria=None
 ):
     df = fotod.copy()
 
@@ -202,6 +232,9 @@ def get_filtered_df(
 
         df = df[df["PID"].isin(pids)]
 
+    if valitud_marksona_kategooria:
+        df = filter_by_comma_categories(df, "Märksõna kategooria", valitud_marksona_kategooria)
+
     if valitud_isik and not isikud.empty and "Isik" in isikud.columns:
         isik_pids = set(isikud[isikud["Isik"].isin(valitud_isik)]["PID"].dropna().unique())
         df = df[df["PID"].isin(isik_pids)]
@@ -216,7 +249,8 @@ def get_available_options(
     valitud_marksona,
     marksona_loogika,
     valitud_fotograaf,
-    valitud_isik
+    valitud_isik,
+    valitud_marksona_kategooria=None
 ):
     # ŽANR: kõik muud filtrid peal, žanr ise maas
     df_for_zanr = get_filtered_df(
@@ -224,7 +258,8 @@ def get_available_options(
         aasta_vahemik,
         [],
         valitud_marksona, marksona_loogika,
-        valitud_fotograaf, valitud_isik
+        valitud_fotograaf, valitud_isik,
+        valitud_marksona_kategooria
     )
     zanr_opts = sorted(
         df_for_zanr["Žanr"].dropna().astype(str).unique().tolist()
@@ -237,7 +272,8 @@ def get_available_options(
         valitud_zanr,
         [],
         marksona_loogika,
-        valitud_fotograaf, valitud_isik
+        valitud_fotograaf, valitud_isik,
+        valitud_marksona_kategooria
     )
     pids_ms = set(df_for_ms["PID"].dropna().unique()) if "PID" in df_for_ms.columns else set()
     ms_opts = (
@@ -247,6 +283,17 @@ def get_available_options(
         else []
     )
 
+    # MÄRKSÕNA KATEGOORIA: kõik muud filtrid peal, kategooria ise maas
+    df_for_mk = get_filtered_df(
+        fotod, marksoned, isikud,
+        aasta_vahemik,
+        valitud_zanr,
+        valitud_marksona, marksona_loogika,
+        valitud_fotograaf, valitud_isik,
+        []
+    )
+    mk_opts = sorted(split_categories(df_for_mk["Märksõna kategooria"]).unique().tolist()) if "Märksõna kategooria" in df_for_mk.columns else []
+
     # FOTOGRAAF: kõik muud filtrid peal, fotograaf ise maas
     df_for_ft = get_filtered_df(
         fotod, marksoned, isikud,
@@ -254,7 +301,8 @@ def get_available_options(
         valitud_zanr,
         valitud_marksona, marksona_loogika,
         [],
-        valitud_isik
+        valitud_isik,
+        valitud_marksona_kategooria
     )
     ft_opts = sorted(
         df_for_ft["Fotograaf"].dropna().astype(str).unique().tolist()
@@ -266,7 +314,8 @@ def get_available_options(
         aasta_vahemik,
         valitud_zanr,
         valitud_marksona, marksona_loogika,
-        valitud_fotograaf, []
+        valitud_fotograaf, [],
+        valitud_marksona_kategooria
     )
     pids_isik = set(df_for_isik["PID"].dropna().unique()) if "PID" in df_for_isik.columns else set()
     isik_opts = (
@@ -276,7 +325,7 @@ def get_available_options(
         else []
     )
 
-    return zanr_opts, ms_opts, ft_opts, isik_opts
+    return zanr_opts, ms_opts, mk_opts, ft_opts, isik_opts
 
 
 def sanitize_state_list(key, allowed_options, max_n=3):
@@ -393,11 +442,37 @@ def load_data():
     isikud = safe_sheet_parse(xl, "isikud_fotol_pikk")
     kihelkonnad_kp = safe_sheet_parse(xl, "kihelkond_keskpunktid")
 
+    # ML lisafailid
+    ml_marksonad = pd.DataFrame()
+    ml_clip = pd.DataFrame()
+
+    ml_marksonad_candidates = [
+        "ERA_märksõnad_ML.xlsx",
+        "ERA_märksõnad_ML.xlsx",
+    ]
+    ml_clip_candidates = [
+        "era_clip_KOIK_pildid_sigmoid.xlsx",
+    ]
+
+    for fname in ml_marksonad_candidates:
+        path = os.path.join(BASE_DIR, fname)
+        if os.path.exists(path):
+            xl_ml = pd.ExcelFile(path)
+            ml_marksonad = safe_sheet_parse(xl_ml, "ml_foto_klastrid")
+            break
+
+    for fname in ml_clip_candidates:
+        path = os.path.join(BASE_DIR, fname)
+        if os.path.exists(path):
+            xl_clip = pd.ExcelFile(path)
+            ml_clip = safe_sheet_parse(xl_clip, "predictions_all")
+            break
+
     if fotod.empty:
         raise ValueError("Sheet 'fotod_koordinaatidega' puudub või on tühi.")
 
     # puhasta veerunimed
-    for d in [fotod, master, marksoned, isikud, kihelkonnad_kp]:
+    for d in [fotod, master, marksoned, isikud, kihelkonnad_kp, ml_marksonad, ml_clip]:
         if not d.empty:
             d.columns = d.columns.astype(str).str.strip()
 
@@ -412,7 +487,7 @@ def load_data():
         "lõplik_longitude": "longitude",
     })
 
-    # ühtlusta keskpunktide tabelis
+    # ühtlasta keskpunktide tabelis
     kihelkonnad_kp = kihelkonnad_kp.rename(columns={
         "Latitude": "latitude",
         "Longitude": "longitude",
@@ -447,12 +522,69 @@ def load_data():
             how="left"
         )
 
+    # sinu käsitsi loodud 19 märksõna-kategooriat
+    if not ml_marksonad.empty and "PID" in ml_marksonad.columns and "PID" in fotod.columns:
+        ml_cols = [c for c in ["PID", "klastrid", "klastrite_arv", "märksõnad", "märksõnade_arv"] if c in ml_marksonad.columns]
+
+        # eemalda varasemad sama info veerud, kui äpp jookseb cache järel või põhitabelis on need juba olemas
+        for c in ["Märksõna kategooria", "Märksõna kategooriate arv", "Originaal märksõnad", "Originaal märksõnade arv"]:
+            if c in fotod.columns:
+                fotod = fotod.drop(columns=[c])
+
+        fotod = fotod.merge(
+            ml_marksonad[ml_cols].drop_duplicates(subset=["PID"]),
+            on="PID",
+            how="left"
+        )
+
+        fotod = fotod.rename(columns={
+            "klastrid": "Märksõna kategooria",
+            "klastrite_arv": "Märksõna kategooriate arv",
+            "märksõnad": "Originaal märksõnad",
+            "märksõnade_arv": "Originaal märksõnade arv",
+        })
+
+    # CLIP masinennustused
+    if not ml_clip.empty and "PID" in ml_clip.columns and "PID" in fotod.columns:
+        clip_cols = [
+            "PID", "pred_top1", "pred_top2", "pred_top3",
+            "pred_top1_score", "pred_top2_score", "pred_top3_score",
+            "confidence_margin_top1_top2",
+            "true_clusters", "hit_top1", "hit_any_top3"
+        ]
+        clip_cols = [c for c in clip_cols if c in ml_clip.columns]
+
+        for c in clip_cols:
+            if c != "PID" and c in fotod.columns:
+                fotod = fotod.drop(columns=[c])
+
+        fotod = fotod.merge(
+            ml_clip[clip_cols].drop_duplicates(subset=["PID"]),
+            on="PID",
+            how="left"
+        )
+
+        if "pred_top1_score" in fotod.columns:
+            fotod["pred_top1_score"] = pd.to_numeric(fotod["pred_top1_score"], errors="coerce")
+            fotod["ML kindlus"] = pd.cut(
+                fotod["pred_top1_score"],
+                bins=[0, 0.555, 0.565, 1],
+                labels=["madal", "keskmine", "kõrgem"],
+                include_lowest=True
+            )
+
     for col in [
         "PID", "Aasta", "Žanr", "Kihelkond", "Sisu kirjeldus", "failinimi",
         "koordinaadid_leitud",
         "latitude", "longitude",
         "Projekt", "ERA märksõnad (koondatud)", "Isikute arv",
-        "kihelkond_kaart", "Kihelkond või linn"
+        "kihelkond_kaart", "Kihelkond või linn",
+        "Märksõna kategooria", "Märksõna kategooriate arv",
+        "Originaal märksõnad", "Originaal märksõnade arv",
+        "pred_top1", "pred_top2", "pred_top3",
+        "pred_top1_score", "pred_top2_score", "pred_top3_score",
+        "confidence_margin_top1_top2", "true_clusters",
+        "hit_top1", "hit_any_top3", "ML kindlus"
     ]:
         ensure_column(fotod, col)
 
@@ -553,7 +685,7 @@ else:
     st.sidebar.info("Aasta veerus väärtusi ei leitud.")
 
 # session state algväärtused
-for key in ["valitud_zanr", "valitud_marksona", "valitud_fotograaf", "valitud_isik"]:
+for key in ["valitud_zanr", "valitud_marksona", "valitud_marksona_kategooria", "valitud_fotograaf", "valitud_isik"]:
     if key not in st.session_state:
         st.session_state[key] = []
 
@@ -563,7 +695,7 @@ if "marksona_loogika_radio" not in st.session_state:
 marksona_loogika = st.session_state["marksona_loogika_radio"]
 
 # esimene valikute arvutus
-zanr_opts, ms_opts, ft_opts, isik_opts = get_available_options(
+zanr_opts, ms_opts, mk_opts, ft_opts, isik_opts = get_available_options(
     fotod, marksoned, isikud,
     aasta_vahemik,
     st.session_state["valitud_zanr"],
@@ -571,10 +703,12 @@ zanr_opts, ms_opts, ft_opts, isik_opts = get_available_options(
     marksona_loogika,
     st.session_state["valitud_fotograaf"],
     st.session_state["valitud_isik"],
+    st.session_state["valitud_marksona_kategooria"],
 )
 
 sanitize_state_list("valitud_zanr", zanr_opts, max_n=3)
 sanitize_state_list("valitud_marksona", ms_opts, max_n=3)
+sanitize_state_list("valitud_marksona_kategooria", mk_opts, max_n=3)
 sanitize_state_list("valitud_fotograaf", ft_opts, max_n=3)
 sanitize_state_list("valitud_isik", isik_opts, max_n=3)
 
@@ -587,7 +721,7 @@ st.sidebar.multiselect(
 )
 
 # arvuta uuesti pärast žanrit
-zanr_opts, ms_opts, ft_opts, isik_opts = get_available_options(
+zanr_opts, ms_opts, mk_opts, ft_opts, isik_opts = get_available_options(
     fotod, marksoned, isikud,
     aasta_vahemik,
     st.session_state["valitud_zanr"],
@@ -595,6 +729,7 @@ zanr_opts, ms_opts, ft_opts, isik_opts = get_available_options(
     st.session_state["marksona_loogika_radio"],
     st.session_state["valitud_fotograaf"],
     st.session_state["valitud_isik"],
+    st.session_state["valitud_marksona_kategooria"],
 )
 
 sanitize_state_list("valitud_marksona", ms_opts, max_n=3)
@@ -615,7 +750,7 @@ if len(st.session_state["valitud_marksona"]) > 1:
     )
 
 # arvuta uuesti pärast märksõnu
-zanr_opts, ms_opts, ft_opts, isik_opts = get_available_options(
+zanr_opts, ms_opts, mk_opts, ft_opts, isik_opts = get_available_options(
     fotod, marksoned, isikud,
     aasta_vahemik,
     st.session_state["valitud_zanr"],
@@ -623,6 +758,29 @@ zanr_opts, ms_opts, ft_opts, isik_opts = get_available_options(
     st.session_state["marksona_loogika_radio"],
     st.session_state["valitud_fotograaf"],
     st.session_state["valitud_isik"],
+    st.session_state["valitud_marksona_kategooria"],
+)
+
+sanitize_state_list("valitud_marksona_kategooria", mk_opts, max_n=3)
+
+st.sidebar.multiselect(
+    "Märksõna kategooria",
+    options=mk_opts,
+    key="valitud_marksona_kategooria",
+    max_selections=3,
+    placeholder="Vali kuni 3 kategooriat"
+)
+
+# arvuta uuesti pärast märksõna kategooriat
+zanr_opts, ms_opts, mk_opts, ft_opts, isik_opts = get_available_options(
+    fotod, marksoned, isikud,
+    aasta_vahemik,
+    st.session_state["valitud_zanr"],
+    st.session_state["valitud_marksona"],
+    st.session_state["marksona_loogika_radio"],
+    st.session_state["valitud_fotograaf"],
+    st.session_state["valitud_isik"],
+    st.session_state["valitud_marksona_kategooria"],
 )
 
 sanitize_state_list("valitud_fotograaf", ft_opts, max_n=3)
@@ -636,7 +794,7 @@ st.sidebar.multiselect(
 )
 
 # arvuta uuesti pärast fotograafi
-zanr_opts, ms_opts, ft_opts, isik_opts = get_available_options(
+zanr_opts, ms_opts, mk_opts, ft_opts, isik_opts = get_available_options(
     fotod, marksoned, isikud,
     aasta_vahemik,
     st.session_state["valitud_zanr"],
@@ -644,6 +802,7 @@ zanr_opts, ms_opts, ft_opts, isik_opts = get_available_options(
     st.session_state["marksona_loogika_radio"],
     st.session_state["valitud_fotograaf"],
     st.session_state["valitud_isik"],
+    st.session_state["valitud_marksona_kategooria"],
 )
 
 sanitize_state_list("valitud_isik", isik_opts, max_n=3)
@@ -657,13 +816,14 @@ st.sidebar.multiselect(
 )
 
 if st.sidebar.button("🧹 Tühjenda kõik filtrid"):
-    for key in ["valitud_zanr", "valitud_marksona", "valitud_fotograaf", "valitud_isik"]:
+    for key in ["valitud_zanr", "valitud_marksona", "valitud_marksona_kategooria", "valitud_fotograaf", "valitud_isik"]:
         st.session_state[key] = []
     st.session_state["marksona_loogika_radio"] = "VÕI – vähemalt üks"
     st.rerun()
 
 valitud_zanr = st.session_state["valitud_zanr"]
 valitud_marksona = st.session_state["valitud_marksona"]
+valitud_marksona_kategooria = st.session_state["valitud_marksona_kategooria"]
 valitud_fotograaf = st.session_state["valitud_fotograaf"]
 valitud_isik = st.session_state["valitud_isik"]
 marksona_loogika = st.session_state["marksona_loogika_radio"]
@@ -675,7 +835,8 @@ df = get_filtered_df(
     valitud_marksona,
     marksona_loogika,
     valitud_fotograaf,
-    valitud_isik
+    valitud_isik,
+    valitud_marksona_kategooria
 )
 
 
@@ -701,8 +862,8 @@ c4.metric(
 )
 st.divider()
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["🗺️ Kaart", "📊 Statistika", "🏷️ Märksõnad", "👤 Isikud", "📋 Andmetabel"]
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    ["🗺️ Kaart", "📊 Statistika", "🏷️ Märksõnad", "👤 Isikud", "🤖 ML märksõnad", "📋 Andmetabel"]
 )
 
 
@@ -1035,13 +1196,176 @@ with tab4:
                     st.plotly_chart(fig2, use_container_width=True)
 
 
-# ══════════════════ TAB 5 – ANDMETABEL ═══════════════════════════════════════
+# ══════════════════ TAB 5 – ML MÄRKSÕNAD ═════════════════════════════════════
 with tab5:
+    st.subheader("🤖 ML märksõnad")
+
+    st.markdown("""
+    CLIP ei „näe” sinu märksõnade nimekirja otse. Ta võrdleb pilti tekstikirjeldustega
+    ja arvutab, milline tekstiline kategooria sobib pildiga kõige paremini.
+
+    Siin saab võrrelda:
+    - sinu olemasolevaid käsitsi loodud märksõna-kategooriaid;
+    - CLIP-i pakutud top 1–3 kategooriat;
+    - pildi pealkirja / sisukirjeldust.
+    """)
+
+    img_path = os.path.join(BASE_DIR, "clip_yhe_pildi_selgitus.png")
+    if os.path.exists(img_path):
+        st.image(img_path, caption="Näide: kuidas CLIP pildi ja tekstikategooriate sobivust hindab", use_container_width=True)
+    else:
+        st.info("Näidispilti 'clip_yhe_pildi_selgitus.png' ei leitud rakenduse kaustast.")
+
+    st.divider()
+
+    ml_df = df.copy()
+    has_clip = "pred_top1" in ml_df.columns and ml_df["pred_top1"].notna().any()
+    has_manual = "Märksõna kategooria" in ml_df.columns and ml_df["Märksõna kategooria"].notna().any()
+
+    if not has_clip and not has_manual:
+        st.warning("ML märksõnade infot ei leitud. Kontrolli, et failid 'ERA_märksõnad_ML.xlsx' ja 'era_clip_KOIK_pildid_sigmoid.xlsx' oleksid rakenduse kaustas.")
+    else:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Fotosid filtris", f"{len(ml_df):,}")
+        c2.metric("CLIP ennustusega", f"{ml_df['pred_top1'].notna().sum():,}" if "pred_top1" in ml_df.columns else "0")
+        c3.metric("Käsitsi kategooriaga", f"{ml_df['Märksõna kategooria'].notna().sum():,}" if "Märksõna kategooria" in ml_df.columns else "0")
+        c4.metric(
+            "Keskmine CLIP skoor",
+            f"{ml_df['pred_top1_score'].mean():.3f}" if "pred_top1_score" in ml_df.columns and ml_df["pred_top1_score"].notna().any() else "?"
+        )
+
+        st.markdown("### Käsitsi kategooriad vs CLIP pakkumised")
+
+        col_a, col_b = st.columns(2)
+
+        with col_a:
+            if has_manual:
+                manual_counts = split_categories(ml_df["Märksõna kategooria"]).value_counts().head(20)
+
+                if len(manual_counts) > 0:
+                    fig = px.bar(
+                        x=manual_counts.values,
+                        y=manual_counts.index,
+                        orientation="h",
+                        labels={"x": "Fotode arv", "y": "Käsitsi kategooria"},
+                        title="Sinu märksõna-kategooriad",
+                        color=manual_counts.values,
+                        color_continuous_scale="Blues",
+                    )
+                    fig.update_layout(yaxis={"autorange": "reversed"}, coloraxis_showscale=False, height=500)
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Käsitsi märksõna-kategooriaid ei leitud.")
+
+        with col_b:
+            if has_clip:
+                clip_counts = ml_df["pred_top1"].dropna().astype(str).value_counts().head(20)
+
+                if len(clip_counts) > 0:
+                    fig = px.bar(
+                        x=clip_counts.values,
+                        y=clip_counts.index,
+                        orientation="h",
+                        labels={"x": "Fotode arv", "y": "CLIP top 1"},
+                        title="CLIP top 1 kategooriad",
+                        color=clip_counts.values,
+                        color_continuous_scale="Oranges",
+                    )
+                    fig.update_layout(yaxis={"autorange": "reversed"}, coloraxis_showscale=False, height=500)
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("CLIP ennustusi ei leitud.")
+
+        if has_clip and has_manual:
+            st.markdown("### Kui tihti CLIP top1 kattub käsitsi kategooriaga?")
+
+            eval_df = ml_df[ml_df["pred_top1"].notna() & ml_df["Märksõna kategooria"].notna()].copy()
+
+            def top1_in_manual(row):
+                pred = str(row["pred_top1"]).strip().lower()
+                cats = [c.strip().lower() for c in str(row["Märksõna kategooria"]).split(",") if c.strip()]
+                return pred in cats
+
+            if not eval_df.empty:
+                eval_df["top1_kattub"] = eval_df.apply(top1_in_manual, axis=1)
+                match_counts = eval_df["top1_kattub"].map({True: "Kattub", False: "Ei kattu"}).value_counts()
+                fig = px.pie(
+                    values=match_counts.values,
+                    names=match_counts.index,
+                    title="CLIP top1 vs käsitsi kategooria"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("### Vaata üksikuid fotosid")
+
+        otsing_ml = st.text_input("Otsi PID, failinime või pealkirja järgi", key="ml_otsing")
+
+        ml_show = ml_df.copy()
+
+        if otsing_ml:
+            mask = pd.Series(False, index=ml_show.index)
+
+            for col in ["PID", "failinimi", "Sisu kirjeldus"]:
+                if col in ml_show.columns:
+                    mask = mask | ml_show[col].fillna("").astype(str).str.contains(otsing_ml, case=False, na=False)
+
+            ml_show = ml_show[mask]
+
+        if has_clip and has_manual:
+            ainult_erinevad = st.checkbox("Näita ainult ridu, kus CLIP top1 ei ole käsitsi kategooriate hulgas")
+
+            if ainult_erinevad:
+                ml_show = ml_show[
+                    ~ml_show.apply(
+                        lambda r: str(r["pred_top1"]).strip().lower() in [
+                            c.strip().lower() for c in str(r["Märksõna kategooria"]).split(",") if c.strip()
+                        ],
+                        axis=1
+                    )
+                ]
+
+        cols_ml = [
+            c for c in [
+                "PID",
+                "failinimi",
+                "Sisu kirjeldus",
+                "Märksõna kategooria",
+                "Originaal märksõnad",
+                "pred_top1",
+                "pred_top2",
+                "pred_top3",
+                "pred_top1_score",
+                "ML kindlus",
+            ] if c in ml_show.columns
+        ]
+
+        st.markdown(f"Näidatakse **{len(ml_show):,}** rida")
+
+        st.dataframe(
+            ml_show[cols_ml].head(500),
+            use_container_width=True,
+            hide_index=True,
+            height=420
+        )
+
+        csv_ml = ml_show[cols_ml].to_csv(index=False).encode("utf-8")
+
+        st.download_button(
+            "⬇️ Lae ML võrdlustabel alla CSV-na",
+            data=csv_ml,
+            file_name="era_ml_marksonad_vordlus.csv",
+            mime="text/csv"
+        )
+
+
+# ══════════════════ TAB 6 – ANDMETABEL ═══════════════════════════════════════
+with tab6:
     st.subheader("Andmetabel")
     vaikimisi = [
         c for c in [
             "PID", "Aasta", "Kihelkond", "kaardi_piirkond", "Fotograaf",
-            "Žanr", "Sisu kirjeldus", "ERA märksõnad (koondatud)", "failinimi"
+            "Žanr", "Märksõna kategooria", "pred_top1",
+            "Sisu kirjeldus", "ERA märksõnad (koondatud)", "failinimi"
         ] if c in df.columns
     ]
 
@@ -1065,6 +1389,10 @@ with tab5:
             mask = mask | safe_str_contains(df_show["kaardi_piirkond"], otsing)
         if "Fotograaf" in df_show.columns:
             mask = mask | safe_str_contains(df_show["Fotograaf"], otsing)
+        if "Märksõna kategooria" in df_show.columns:
+            mask = mask | safe_str_contains(df_show["Märksõna kategooria"], otsing)
+        if "pred_top1" in df_show.columns:
+            mask = mask | safe_str_contains(df_show["pred_top1"], otsing)
 
         df_show = df_show[mask]
 
