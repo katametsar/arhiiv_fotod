@@ -35,7 +35,7 @@ def find_existing_file(candidates, fallback_contains=None):
         wanted = normalize_filename_for_match(fallback_contains)
         for fname in os.listdir(BASE_DIR):
             if wanted in normalize_filename_for_match(fname):
-            return os.path.join(BASE_DIR, fname)
+                return os.path.join(BASE_DIR, fname)
 
     return None
 
