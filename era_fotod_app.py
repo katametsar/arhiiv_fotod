@@ -4,6 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import os
 import json
+import unicodedata
 
 st.set_page_config(page_title="ERA Fotode Andmebaas", page_icon="📷", layout="wide")
 
@@ -15,6 +16,48 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 def safe_sheet_parse(xl, sheet_name):
     if sheet_name in xl.sheet_names:
         return xl.parse(sheet_name)
+    return pd.DataFrame()
+
+
+def normalize_filename_for_match(name):
+    """Failinimede võrdlus, mis talub täpitähtede eri Unicode-kujusid."""
+    text = unicodedata.normalize("NFKD", str(name)).encode("ascii", "ignore").decode("ascii")
+    return text.lower().replace(" ", "").replace("_", "").replace("-", "")
+
+
+def find_existing_file(candidates, fallback_contains=None):
+    for fname in candidates:
+        path = os.path.join(BASE_DIR, fname)
+        if os.path.exists(path):
+            return path
+
+    if fallback_contains:
+        wanted = normalize_filename_for_match(fallback_contains)
+        for fname in os.listdir(BASE_DIR):
+            if wanted in normalize_filename_for_match(fname):
+                return os.path.join(BASE_DIR, fname)
+
+    return None
+
+
+def read_first_existing_sheet(path, preferred_sheets, required_cols=None):
+    if not path or not os.path.exists(path):
+        return pd.DataFrame()
+
+    xl = pd.ExcelFile(path)
+
+    for sheet in preferred_sheets:
+        if sheet in xl.sheet_names:
+            df = xl.parse(sheet)
+            if required_cols is None or any(c in df.columns for c in required_cols):
+                return df
+
+    if required_cols:
+        for sheet in xl.sheet_names:
+            df = xl.parse(sheet)
+            if any(c in df.columns for c in required_cols):
+                return df
+
     return pd.DataFrame()
 
 
@@ -195,6 +238,55 @@ def filter_by_comma_categories(df, col, selected):
         return any(c in selected_lower for c in cats)
 
     return df[df[col].fillna("").apply(has_any_category)]
+
+
+def category_match(row, manual_col="Märksõna kategooria", pred_cols=None):
+    if pred_cols is None:
+        pred_cols = ["pred_top1", "pred_top2", "pred_top3"]
+
+    manual = [c.strip().lower() for c in str(row.get(manual_col, "")).split(",") if c.strip()]
+    preds = [str(row.get(c, "")).strip().lower() for c in pred_cols if str(row.get(c, "")).strip() and str(row.get(c, "")).lower() != "nan"]
+
+    if not manual or not preds:
+        return False
+
+    return any(p in manual for p in preds)
+
+
+def add_ml_strength_columns(df):
+    """Lisab ML-i tõlgendamiseks paremad koondväljad kui ainult pred_top1_score."""
+    score_cols_top3 = [c for c in ["pred_top1_score", "pred_top2_score", "pred_top3_score"] if c in df.columns]
+    score_cols_top5 = [c for c in ["pred_top1_score", "pred_top2_score", "pred_top3_score", "pred_top4_score", "pred_top5_score"] if c in df.columns]
+
+    for col in score_cols_top5 + ["confidence_margin_top1_top2"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    if score_cols_top3:
+        df["ML top3 koondskoor"] = df[score_cols_top3].sum(axis=1, min_count=1)
+
+    if score_cols_top5:
+        df["ML top5 koondskoor"] = df[score_cols_top5].sum(axis=1, min_count=1)
+
+    if "confidence_margin_top1_top2" not in df.columns and {"pred_top1_score", "pred_top2_score"}.issubset(df.columns):
+        df["confidence_margin_top1_top2"] = df["pred_top1_score"] - df["pred_top2_score"]
+
+    if "pred_top1_score" in df.columns and "confidence_margin_top1_top2" in df.columns:
+        def strength(row):
+            top1 = row.get("pred_top1_score")
+            margin = row.get("confidence_margin_top1_top2")
+            if pd.isna(top1) or pd.isna(margin):
+                return pd.NA
+            if top1 >= 0.565 and margin >= 0.020:
+                return "tugev"
+            if top1 >= 0.555 and margin >= 0.010:
+                return "keskmine"
+            return "nõrk / kontrolli üle"
+
+        df["ML otsuse tugevus"] = df.apply(strength, axis=1)
+        df["ML kindlus"] = df["ML otsuse tugevus"]
+
+    return df
 
 
 def get_filtered_df(
@@ -449,32 +541,38 @@ def load_data():
     ml_marksonad_candidates = [
         "ERA_märksõnad_ML.xlsx",
         "ERA_märksõnad_ML.xlsx",
+        "ERA_marksonad_ML.xlsx",
     ]
     ml_clip_candidates = [
         "era_clip_KOIK_pildid_sigmoid.xlsx",
     ]
 
-    for fname in ml_marksonad_candidates:
-        path = os.path.join(BASE_DIR, fname)
-        if os.path.exists(path):
-            xl_ml = pd.ExcelFile(path)
-            ml_marksonad = safe_sheet_parse(xl_ml, "ml_foto_klastrid")
-            break
+    ml_marksonad_path = find_existing_file(ml_marksonad_candidates, fallback_contains="marksonadml")
+    ml_clip_path = find_existing_file(ml_clip_candidates, fallback_contains="clipkoikpildidsigmoid")
 
-    for fname in ml_clip_candidates:
-        path = os.path.join(BASE_DIR, fname)
-        if os.path.exists(path):
-            xl_clip = pd.ExcelFile(path)
-            ml_clip = safe_sheet_parse(xl_clip, "predictions_all")
-            break
+    ml_marksonad = read_first_existing_sheet(
+        ml_marksonad_path,
+        preferred_sheets=["ml_foto_klastrid", "märksõnad_pikk", "ml_multihot_klastrid"],
+        required_cols=["klastrid", "Märksõna2"]
+    )
+
+    ml_clip = read_first_existing_sheet(
+        ml_clip_path,
+        preferred_sheets=["predictions_all", "predictions_eval_only", "sample_all"],
+        required_cols=["pred_top1", "true_clusters"]
+    )
 
     if fotod.empty:
         raise ValueError("Sheet 'fotod_koordinaatidega' puudub või on tühi.")
 
-    # puhasta veerunimed
+    # puhasta veerunimed ja PID-id
     for d in [fotod, master, marksoned, isikud, kihelkonnad_kp, ml_marksonad, ml_clip]:
         if not d.empty:
             d.columns = d.columns.astype(str).str.strip()
+            if "PID" in d.columns:
+                d["PID"] = d["PID"].fillna("").astype(str).str.strip()
+            if "failinimi" in d.columns:
+                d["failinimi"] = d["failinimi"].fillna("").astype(str).str.strip()
 
     # ühtlusta koordinaadiveerud fotode tabelis
     fotod = fotod.rename(columns={
@@ -524,6 +622,20 @@ def load_data():
 
     # sinu käsitsi loodud 19 märksõna-kategooriat
     if not ml_marksonad.empty and "PID" in ml_marksonad.columns and "PID" in fotod.columns:
+        # Kui kogemata loeti pikem märksõnade leht, koonda see ise PID-tasemele.
+        if "klastrid" not in ml_marksonad.columns and "Märksõna2" in ml_marksonad.columns:
+            agg_dict = {
+                "Märksõna2": lambda s: ", ".join(sorted(set(x for x in s.dropna().astype(str).str.strip() if x))),
+            }
+            if "Märksõna" in ml_marksonad.columns:
+                agg_dict["Märksõna"] = lambda s: ", ".join(sorted(set(x for x in s.dropna().astype(str).str.strip() if x)))
+
+            ml_marksonad = ml_marksonad.groupby("PID", as_index=False).agg(agg_dict)
+            ml_marksonad = ml_marksonad.rename(columns={"Märksõna2": "klastrid", "Märksõna": "märksõnad"})
+            ml_marksonad["klastrite_arv"] = ml_marksonad["klastrid"].fillna("").apply(lambda x: len([c for c in str(x).split(",") if c.strip()]))
+            if "märksõnad" in ml_marksonad.columns:
+                ml_marksonad["märksõnade_arv"] = ml_marksonad["märksõnad"].fillna("").apply(lambda x: len([c for c in str(x).split(",") if c.strip()]))
+
         ml_cols = [c for c in ["PID", "klastrid", "klastrite_arv", "märksõnad", "märksõnade_arv"] if c in ml_marksonad.columns]
 
         # eemalda varasemad sama info veerud, kui äpp jookseb cache järel või põhitabelis on need juba olemas
@@ -547,10 +659,10 @@ def load_data():
     # CLIP masinennustused
     if not ml_clip.empty and "PID" in ml_clip.columns and "PID" in fotod.columns:
         clip_cols = [
-            "PID", "pred_top1", "pred_top2", "pred_top3",
-            "pred_top1_score", "pred_top2_score", "pred_top3_score",
+            "PID", "pred_top1", "pred_top2", "pred_top3", "pred_top4", "pred_top5",
+            "pred_top1_score", "pred_top2_score", "pred_top3_score", "pred_top4_score", "pred_top5_score",
             "confidence_margin_top1_top2",
-            "true_clusters", "hit_top1", "hit_any_top3"
+            "true_clusters", "hit_top1", "hit_any_top3", "hit_any_top5"
         ]
         clip_cols = [c for c in clip_cols if c in ml_clip.columns]
 
@@ -564,14 +676,7 @@ def load_data():
             how="left"
         )
 
-        if "pred_top1_score" in fotod.columns:
-            fotod["pred_top1_score"] = pd.to_numeric(fotod["pred_top1_score"], errors="coerce")
-            fotod["ML kindlus"] = pd.cut(
-                fotod["pred_top1_score"],
-                bins=[0, 0.555, 0.565, 1],
-                labels=["madal", "keskmine", "kõrgem"],
-                include_lowest=True
-            )
+        fotod = add_ml_strength_columns(fotod)
 
     for col in [
         "PID", "Aasta", "Žanr", "Kihelkond", "Sisu kirjeldus", "failinimi",
@@ -582,9 +687,10 @@ def load_data():
         "Märksõna kategooria", "Märksõna kategooriate arv",
         "Originaal märksõnad", "Originaal märksõnade arv",
         "pred_top1", "pred_top2", "pred_top3",
-        "pred_top1_score", "pred_top2_score", "pred_top3_score",
-        "confidence_margin_top1_top2", "true_clusters",
-        "hit_top1", "hit_any_top3", "ML kindlus"
+        "pred_top1", "pred_top2", "pred_top3", "pred_top4", "pred_top5",
+        "pred_top1_score", "pred_top2_score", "pred_top3_score", "pred_top4_score", "pred_top5_score",
+        "confidence_margin_top1_top2", "ML top3 koondskoor", "ML top5 koondskoor",
+        "true_clusters", "hit_top1", "hit_any_top3", "hit_any_top5", "ML kindlus", "ML otsuse tugevus"
     ]:
         ensure_column(fotod, col)
 
@@ -671,6 +777,12 @@ if st.sidebar.button("🔄 Uuenda andmed"):
     st.rerun()
 
 st.sidebar.info("Praegu on aktiivne ainult ajalooline kihelkonnapõhine kaart.")
+
+if st.sidebar.button("🧹 Tühjenda kõik filtrid"):
+    for key in ["valitud_zanr", "valitud_marksona", "valitud_marksona_kategooria", "valitud_fotograaf", "valitud_isik"]:
+        st.session_state[key] = []
+    st.session_state["marksona_loogika_radio"] = "VÕI – vähemalt üks"
+    st.rerun()
 
 if fotod["Aasta"].notna().any():
     aastad = fotod["Aasta"].dropna().astype(int)
@@ -814,12 +926,6 @@ st.sidebar.multiselect(
     max_selections=3,
     placeholder="Vali kuni 3"
 )
-
-if st.sidebar.button("🧹 Tühjenda kõik filtrid"):
-    for key in ["valitud_zanr", "valitud_marksona", "valitud_marksona_kategooria", "valitud_fotograaf", "valitud_isik"]:
-        st.session_state[key] = []
-    st.session_state["marksona_loogika_radio"] = "VÕI – vähemalt üks"
-    st.rerun()
 
 valitud_zanr = st.session_state["valitud_zanr"]
 valitud_marksona = st.session_state["valitud_marksona"]
@@ -1230,8 +1336,8 @@ with tab5:
         c2.metric("CLIP ennustusega", f"{ml_df['pred_top1'].notna().sum():,}" if "pred_top1" in ml_df.columns else "0")
         c3.metric("Käsitsi kategooriaga", f"{ml_df['Märksõna kategooria'].notna().sum():,}" if "Märksõna kategooria" in ml_df.columns else "0")
         c4.metric(
-            "Keskmine CLIP skoor",
-            f"{ml_df['pred_top1_score'].mean():.3f}" if "pred_top1_score" in ml_df.columns and ml_df["pred_top1_score"].notna().any() else "?"
+            "Keskmine top1–top2 vahe",
+            f"{ml_df['confidence_margin_top1_top2'].mean():.3f}" if "confidence_margin_top1_top2" in ml_df.columns and ml_df["confidence_margin_top1_top2"].notna().any() else "?"
         )
 
         st.markdown("### Käsitsi kategooriad vs CLIP pakkumised")
@@ -1277,24 +1383,35 @@ with tab5:
                 st.info("CLIP ennustusi ei leitud.")
 
         if has_clip and has_manual:
-            st.markdown("### Kui tihti CLIP top1 kattub käsitsi kategooriaga?")
+            st.markdown("### Kui tihti CLIP kattub käsitsi kategooriaga?")
 
             eval_df = ml_df[ml_df["pred_top1"].notna() & ml_df["Märksõna kategooria"].notna()].copy()
 
-            def top1_in_manual(row):
-                pred = str(row["pred_top1"]).strip().lower()
-                cats = [c.strip().lower() for c in str(row["Märksõna kategooria"]).split(",") if c.strip()]
-                return pred in cats
-
             if not eval_df.empty:
-                eval_df["top1_kattub"] = eval_df.apply(top1_in_manual, axis=1)
-                match_counts = eval_df["top1_kattub"].map({True: "Kattub", False: "Ei kattu"}).value_counts()
+                eval_df["top1_kattub"] = eval_df.apply(lambda r: category_match(r, pred_cols=["pred_top1"]), axis=1)
+                eval_df["top3_kattub"] = eval_df.apply(lambda r: category_match(r, pred_cols=["pred_top1", "pred_top2", "pred_top3"]), axis=1)
+                eval_df["top5_kattub"] = eval_df.apply(lambda r: category_match(r, pred_cols=["pred_top1", "pred_top2", "pred_top3", "pred_top4", "pred_top5"]), axis=1)
+
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Top1 kattuvus", f"{eval_df['top1_kattub'].mean() * 100:.1f}%")
+                m2.metric("Top3 kattuvus", f"{eval_df['top3_kattub'].mean() * 100:.1f}%")
+                m3.metric("Top5 kattuvus", f"{eval_df['top5_kattub'].mean() * 100:.1f}%")
+
+                match_counts = eval_df["top3_kattub"].map({True: "Top3 seas kattub", False: "Top3 seas ei kattu"}).value_counts()
                 fig = px.pie(
                     values=match_counts.values,
                     names=match_counts.index,
-                    title="CLIP top1 vs käsitsi kategooria"
+                    title="CLIP top3 vs käsitsi kategooria"
                 )
                 st.plotly_chart(fig, use_container_width=True)
+
+        if has_clip:
+            st.markdown("### ML skooride tõlgendus")
+            score_cols = [c for c in ["pred_top1_score", "confidence_margin_top1_top2", "ML top3 koondskoor", "ML top5 koondskoor"] if c in ml_df.columns]
+            if score_cols:
+                st.caption("Top1 skoor üksi ei ole väga hea kvaliteedimõõdik. Praktilisem on vaadata koos top1–top2 vahet ning seda, kas õige/sobiv kategooria ilmub top3 või top5 hulka.")
+                score_summary = ml_df[score_cols].describe().T.reset_index().rename(columns={"index": "skoor"})
+                st.dataframe(score_summary, use_container_width=True, hide_index=True)
 
         st.markdown("### Vaata üksikuid fotosid")
 
@@ -1312,14 +1429,12 @@ with tab5:
             ml_show = ml_show[mask]
 
         if has_clip and has_manual:
-            ainult_erinevad = st.checkbox("Näita ainult ridu, kus CLIP top1 ei ole käsitsi kategooriate hulgas")
+            ainult_erinevad = st.checkbox("Näita ainult ridu, kus CLIP top3 ei ole käsitsi kategooriate hulgas")
 
             if ainult_erinevad:
                 ml_show = ml_show[
                     ~ml_show.apply(
-                        lambda r: str(r["pred_top1"]).strip().lower() in [
-                            c.strip().lower() for c in str(r["Märksõna kategooria"]).split(",") if c.strip()
-                        ],
+                        lambda r: category_match(r, pred_cols=["pred_top1", "pred_top2", "pred_top3"]),
                         axis=1
                     )
                 ]
@@ -1334,8 +1449,13 @@ with tab5:
                 "pred_top1",
                 "pred_top2",
                 "pred_top3",
+                "pred_top4",
+                "pred_top5",
                 "pred_top1_score",
-                "ML kindlus",
+                "confidence_margin_top1_top2",
+                "ML top3 koondskoor",
+                "ML top5 koondskoor",
+                "ML otsuse tugevus",
             ] if c in ml_show.columns
         ]
 
