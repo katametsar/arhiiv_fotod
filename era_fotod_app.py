@@ -525,7 +525,7 @@ def plot_network_from_edges(edges_df, source_col, target_col, weight_col, title,
 @st.cache_data
 def load_data():
     xlsx_path = None
-    for fname in ["ERA_fotod_250426.xlsx"]:
+        for fname in ["ERA_fotod_piiridega.xlsx", "ERA_fotod_250426.xlsx"]:
         path = os.path.join(BASE_DIR, fname)
         if os.path.exists(path):
             xlsx_path = path
@@ -868,19 +868,6 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
 
 # ══════════════════ TAB 1 – KAART ════════════════════════════════════════════
 #
-# Muudatused võrreldes eelmise versiooniga:
-#
-#  1. Choropleth kasutab "kihelkond_kaart" veergu (mitte "kaardi_piirkond"),
-#     mis kattub GeoJSON-iga 100% — ei mingeid hallikaid alasid.
-#  2. Linnad, Setumaa jt (kp tabelis aga mitte GeoJSON-is) kuvatakse
-#     eraldi ringmarkeritena — nad ei kao enam ära.
-#  3. Klikk kihelkonnal suumib kaardi sisse ja kuvab fotopunktid
-#     scatter_mapbox-iga open-street-map taustal.
-#     Detailvaates POLE vallapiire — ainult kihelkonna piirid ja fotopunktid.
-#  4. asustusyksus.geojson ei kasutata enam üldse (kustuta fail).
-#  5. Kood eeldab, et load_data() tagastab kihelkonnad_kp tabeli,
-#     mille esimese veeru nimi on "Kihelkond või linn" ning on veerud
-#     "latitude" ja "longitude".
 #
 # ─────────────────────────────────────────────────────────────────────────────
  
