@@ -892,127 +892,244 @@ with tab4:
 with tab5:
     st.subheader("🤖 ML märksõnad")
     st.markdown("Kaks vaadet: põhifotodega seotud CLIP tulemused (PID olemas) ja kõik CLIP sh `image_only`.")
+
     img_path = os.path.join(BASE_DIR, "clip_yhe_pildi_selgitus.png")
     if os.path.exists(img_path):
-        st.image(img_path, caption="Näide: CLIP pildi ja tekstikategooriate sobivuse hindamine", use_container_width=True)
+        st.image(
+            img_path,
+            caption="Näide: CLIP pildi ja tekstikategooriate sobivuse hindamine",
+            use_container_width=True
+        )
+
     st.divider()
 
-    ml_df  = df.copy()
+    ml_df = df.copy()
     clip_a = prep_clip(ml_clip_all)
-    has_any = (not clip_a.empty and "pred_top1" in clip_a.columns and clip_a["pred_top1"].notna().any()) or \
-              ("pred_top1" in ml_df.columns and ml_df["pred_top1"].notna().any()) or \
-              ("Märksõna kategooria" in ml_df.columns and ml_df["Märksõna kategooria"].notna().any())
+
+    has_any = (
+        (not clip_a.empty and "pred_top1" in clip_a.columns and clip_a["pred_top1"].notna().any())
+        or ("pred_top1" in ml_df.columns and ml_df["pred_top1"].notna().any())
+        or ("Märksõna kategooria" in ml_df.columns and ml_df["Märksõna kategooria"].notna().any())
+    )
 
     if not has_any:
         st.warning("ML infot ei leitud. Kontrolli failide olemasolu.")
     else:
-        pid_n    = clip_a["PID"].fillna("").astype(str).str.strip().ne("").sum() if not clip_a.empty and "PID" in clip_a.columns else 0
-        img_only = clip_a[clip_a["PID"].fillna("").astype(str).str.strip().eq("")] if not clip_a.empty and "PID" in clip_a.columns else pd.DataFrame()
-        c1,c2,c3,c4 = st.columns(4)
+        pid_n = (
+            clip_a["PID"].fillna("").astype(str).str.strip().ne("").sum()
+            if not clip_a.empty and "PID" in clip_a.columns
+            else 0
+        )
+
+        img_only = (
+            clip_a[clip_a["PID"].fillna("").astype(str).str.strip().eq("")]
+            if not clip_a.empty and "PID" in clip_a.columns
+            else pd.DataFrame()
+        )
+
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("Fotosid filtris", f"{len(ml_df):,}")
         c2.metric("CLIP kokku", f"{len(clip_a):,}" if not clip_a.empty else "0")
         c3.metric("CLIP + PID", f"{pid_n:,}")
         c4.metric("Image-only", f"{len(img_only):,}")
+
         st.caption("`image_only`: pilt leiti kaustast, aga PID-i ei saanud külge panna.")
 
-        view = st.radio("Vali ML-vaade", ["Põhifotodega seotud CLIP", "Kõik CLIP, sh image-only"], horizontal=True)
+        view = st.radio(
+            "Vali ML-vaade",
+            ["Põhifotodega seotud CLIP", "Kõik CLIP, sh image-only"],
+            horizontal=True
+        )
+
         if view.startswith("Kõik"):
-            active, man_col = clip_a.copy(), ("true_clusters" if "true_clusters" in clip_a.columns else None)
+            active = clip_a.copy()
+            man_col = "true_clusters" if "true_clusters" in clip_a.columns else None
         else:
-            active, man_col = ml_df.copy(), "Märksõna kategooria"
+            active = ml_df.copy()
+            man_col = "Märksõna kategooria"
 
-        if "pred_top1" in active.columns and active["pred_top1"].notna().any():
-            cc = clean_series(active["pred_top1"]).value_counts().head(20)
-            st.markdown("### CLIP top1 kategooriad")
-            fig = px.bar(x=cc.values, y=cc.index, orientation="h",
-                         labels={"x":"Piltide arv","y":"CLIP top1"}, title="CLIP top1 kategooriad",
-                         color=cc.values, color_continuous_scale="Oranges")
-            fig.update_layout(yaxis={"autorange":"reversed"}, coloraxis_showscale=False, height=500)
-            st.plotly_chart(fig, use_container_width=True)
-
+        # Alles jäävad ainult kaks kõrvuti olevat tulpgraafikut:
+        # 1) olemasolevad kategooriad
+        # 2) CLIP top1 kategooriad
         c_l, c_r = st.columns(2)
+
         with c_l:
             if man_col and man_col in active.columns and active[man_col].notna().any():
                 mc = split_cats(active[man_col]).value_counts().head(20)
+
                 if len(mc):
                     st.markdown("### Olemasolevad kategooriad")
-                    fig = px.bar(x=mc.values, y=mc.index, orientation="h",
-                                 labels={"x":"Fotode arv","y":"Kategooria"}, color=mc.values, color_continuous_scale="Blues")
-                    fig.update_layout(yaxis={"autorange":"reversed"}, coloraxis_showscale=False, height=500)
+                    fig = px.bar(
+                        x=mc.values,
+                        y=mc.index,
+                        orientation="h",
+                        labels={"x": "Fotode arv", "y": "Kategooria"},
+                        title="Olemasolevad kategooriad",
+                        color=mc.values,
+                        color_continuous_scale="Blues"
+                    )
+                    fig.update_layout(
+                        yaxis={"autorange": "reversed"},
+                        coloraxis_showscale=False,
+                        height=500
+                    )
                     st.plotly_chart(fig, use_container_width=True)
+
         with c_r:
             if "pred_top1" in active.columns and active["pred_top1"].notna().any():
-                cc2 = clean_series(active["pred_top1"]).value_counts().head(20)
-                st.markdown("### CLIP top1")
-                fig = px.bar(x=cc2.values, y=cc2.index, orientation="h",
-                             labels={"x":"Fotode arv","y":"CLIP top1"}, color=cc2.values, color_continuous_scale="Oranges")
-                fig.update_layout(yaxis={"autorange":"reversed"}, coloraxis_showscale=False, height=500)
-                st.plotly_chart(fig, use_container_width=True)
+                cc = clean_series(active["pred_top1"]).value_counts().head(20)
+
+                if len(cc):
+                    st.markdown("### CLIP top1")
+                    fig = px.bar(
+                        x=cc.values,
+                        y=cc.index,
+                        orientation="h",
+                        labels={"x": "Fotode arv", "y": "CLIP top1"},
+                        title="CLIP top1 kategooriad",
+                        color=cc.values,
+                        color_continuous_scale="Oranges"
+                    )
+                    fig.update_layout(
+                        yaxis={"autorange": "reversed"},
+                        coloraxis_showscale=False,
+                        height=500
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
 
         if man_col and man_col in active.columns and "pred_top1" in active.columns:
             ev = active[active["pred_top1"].notna() & active[man_col].notna()].copy()
+
             if not ev.empty:
                 st.markdown("### Kattuvus olemasoleva kategooriaga")
-                for cn, pc in [("top1",["pred_top1"]),
-                                ("top3",["pred_top1","pred_top2","pred_top3"]),
-                                ("top5",["pred_top1","pred_top2","pred_top3","pred_top4","pred_top5"])]:
+
+                for cn, pc in [
+                    ("top1", ["pred_top1"]),
+                    ("top3", ["pred_top1", "pred_top2", "pred_top3"]),
+                    ("top5", ["pred_top1", "pred_top2", "pred_top3", "pred_top4", "pred_top5"]),
+                ]:
                     ev[f"{cn}_kattub"] = ev.apply(lambda r: cat_match(r, man_col, pc), axis=1)
-                m1,m2,m3 = st.columns(3)
-                m1.metric("Top1", f"{ev['top1_kattub'].mean()*100:.1f}%")
-                m2.metric("Top3", f"{ev['top3_kattub'].mean()*100:.1f}%")
-                m3.metric("Top5", f"{ev['top5_kattub'].mean()*100:.1f}%")
+
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Top1", f"{ev['top1_kattub'].mean() * 100:.1f}%")
+                m2.metric("Top3", f"{ev['top3_kattub'].mean() * 100:.1f}%")
+                m3.metric("Top5", f"{ev['top5_kattub'].mean() * 100:.1f}%")
 
                 heat = ev.copy()
-                heat["ml"] = heat[man_col].astype(str).str.replace(";",",",regex=False).str.replace("|",",",regex=False).str.split(",")
+                heat["ml"] = (
+                    heat[man_col]
+                    .astype(str)
+                    .str.replace(";", ",", regex=False)
+                    .str.replace("|", ",", regex=False)
+                    .str.split(",")
+                )
+
                 pairs = heat.explode("ml")
                 pairs["ml"] = pairs["ml"].astype(str).str.strip()
                 pairs = pairs[pairs["ml"].notna() & ~pairs["ml"].str.lower().isin(NULL_VALS)]
-                mat = pairs.groupby(["ml","pred_top1"]).size().reset_index(name="arv")
+
+                mat = pairs.groupby(["ml", "pred_top1"]).size().reset_index(name="arv")
+
                 if not mat.empty:
-                    fig = px.density_heatmap(mat, x="pred_top1", y="ml", z="arv",
-                                             color_continuous_scale="Blues",
-                                             labels={"pred_top1":"CLIP top1","ml":"Olemasolev","arv":"Arv"},
-                                             title="Kategooriate kattuvus heatmap")
+                    fig = px.density_heatmap(
+                        mat,
+                        x="pred_top1",
+                        y="ml",
+                        z="arv",
+                        color_continuous_scale="Blues",
+                        labels={
+                            "pred_top1": "CLIP top1",
+                            "ml": "Olemasolev",
+                            "arv": "Arv"
+                        },
+                        title="Kategooriate kattuvus heatmap"
+                    )
                     fig.update_layout(height=600)
                     st.plotly_chart(fig, use_container_width=True)
-
-                pie_c = ev["top3_kattub"].map({True:"Top3 seas kattub", False:"Ei kattu"}).value_counts()
-                st.plotly_chart(px.pie(values=pie_c.values, names=pie_c.index, title="CLIP top3 vs olemasolev"), use_container_width=True)
 
         if not ml_metrics.empty:
             mtr = ml_metrics.copy()
             mtr.columns = mtr.columns.astype(str).str.strip()
-            mc2 = next((c for c in ["f1_top3","top3_f1","hit_any_top3","top3_hit_rate"] if c in mtr.columns), None)
-            cc3 = next((c for c in ["cluster","kategooria","Märksõna kategooria"] if c in mtr.columns), None)
+
+            mc2 = next(
+                (c for c in ["f1_top3", "top3_f1", "hit_any_top3", "top3_hit_rate"] if c in mtr.columns),
+                None
+            )
+            cc3 = next(
+                (c for c in ["cluster", "kategooria", "Märksõna kategooria"] if c in mtr.columns),
+                None
+            )
+
             if mc2 and cc3:
                 mtr[mc2] = pd.to_numeric(mtr[mc2], errors="coerce")
+
                 st.markdown("### CLIP kvaliteet kategooriate kaupa")
-                fig = px.bar(mtr.dropna(subset=[mc2]).sort_values(mc2), x=mc2, y=cc3, orientation="h",
-                             title="Milliste kategooriate puhul CLIP paremini töötab?")
+                fig = px.bar(
+                    mtr.dropna(subset=[mc2]).sort_values(mc2),
+                    x=mc2,
+                    y=cc3,
+                    orientation="h",
+                    title="Milliste kategooriate puhul CLIP paremini töötab?"
+                )
                 fig.update_layout(height=550)
                 st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("### Vaata üksikuid ML ridu")
+
         q = st.text_input("Otsi PID, failinime järgi", key="ml_q")
         ml_show = active.copy()
+
         if q:
             mask = pd.Series(False, index=ml_show.index)
-            for col in ["PID","failinimi","Sisu kirjeldus"]:
+            for col in ["PID", "failinimi", "Sisu kirjeldus"]:
                 if col in ml_show.columns:
                     mask |= safe_contains(ml_show[col], q)
             ml_show = ml_show[mask]
+
         if man_col and man_col in ml_show.columns and "pred_top1" in ml_show.columns:
             if st.checkbox("Näita ainult ridu, kus CLIP top3 ei kata olemasolevat"):
-                ml_show = ml_show[~ml_show.apply(lambda r: cat_match(r, man_col, ["pred_top1","pred_top2","pred_top3"]), axis=1)]
-        ml_cols = [c for c in ["PID","failinimi","Sisu kirjeldus","Märksõna kategooria","true_clusters",
-                                "pred_top1","pred_top2","pred_top3","pred_top1_score",
-                                "confidence_margin_top1_top2","ML top3 koondskoor","ML otsuse tugevus",
-                                "hit_top1","hit_any_top3"] if c in ml_show.columns]
-        st.markdown(f"Näidatakse **{len(ml_show):,}** rida")
-        st.dataframe(ml_show[ml_cols].head(1000), use_container_width=True, hide_index=True, height=420)
-        csv_ml = ml_show[ml_cols].to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Lae ML tabel CSV-na", data=csv_ml, file_name="era_ml_vordlus.csv", mime="text/csv")
+                ml_show = ml_show[
+                    ~ml_show.apply(
+                        lambda r: cat_match(r, man_col, ["pred_top1", "pred_top2", "pred_top3"]),
+                        axis=1
+                    )
+                ]
 
+        ml_cols = [
+            c for c in [
+                "PID",
+                "failinimi",
+                "Sisu kirjeldus",
+                "Märksõna kategooria",
+                "true_clusters",
+                "pred_top1",
+                "pred_top2",
+                "pred_top3",
+                "pred_top1_score",
+                "confidence_margin_top1_top2",
+                "ML top3 koondskoor",
+                "ML otsuse tugevus",
+                "hit_top1",
+                "hit_any_top3"
+            ]
+            if c in ml_show.columns
+        ]
+
+        st.markdown(f"Näidatakse **{len(ml_show):,}** rida")
+        st.dataframe(
+            ml_show[ml_cols].head(1000),
+            use_container_width=True,
+            hide_index=True,
+            height=420
+        )
+
+        csv_ml = ml_show[ml_cols].to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "⬇️ Lae ML tabel CSV-na",
+            data=csv_ml,
+            file_name="era_ml_vordlus.csv",
+            mime="text/csv"
+        )
 
 # ══════════════════ TAB 6 – ANDMETABEL ═══════════════════════════════════════
 with tab6:
