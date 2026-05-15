@@ -867,129 +867,317 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
 
 
 # ══════════════════ TAB 1 – KAART ════════════════════════════════════════════
+#
+# Muudatused võrreldes eelmise versiooniga:
+#
+#  1. Choropleth kasutab "kihelkond_kaart" veergu (mitte "kaardi_piirkond"),
+#     mis kattub GeoJSON-iga 100% — ei mingeid hallikaid alasid.
+#  2. Linnad, Setumaa jt (kp tabelis aga mitte GeoJSON-is) kuvatakse
+#     eraldi ringmarkeritena — nad ei kao enam ära.
+#  3. Klikk kihelkonnal suumib kaardi sisse ja kuvab fotopunktid
+#     scatter_mapbox-iga open-street-map taustal.
+#     Detailvaates POLE vallapiire — ainult kihelkonna piirid ja fotopunktid.
+#  4. asustusyksus.geojson ei kasutata enam üldse (kustuta fail).
+#  5. Kood eeldab, et load_data() tagastab kihelkonnad_kp tabeli,
+#     mille esimese veeru nimi on "Kihelkond või linn" ning on veerud
+#     "latitude" ja "longitude".
+#
+# ─────────────────────────────────────────────────────────────────────────────
+ 
 with tab1:
-    st.subheader("Fotod kihelkondade ja linnade kaupa")
-    kihel_veerg = "kaardi_piirkond"
-
-    if kihel_veerg not in df.columns:
-        st.warning("Kaardipiirkonna veerg puudub.")
-    else:
-        df_map_src = df[
-            df[kihel_veerg].notna() &
-            ~df[kihel_veerg].astype(str).str.lower().isin(["teadmata", "välismaa", "välismaa,"])
-        ].copy()
-
-        kihel_counts = (
-            df_map_src.groupby(kihel_veerg).size()
-            .reset_index(name="Fotode arv")
-            .rename(columns={kihel_veerg: "kaardi_piirkond"})
+    st.subheader("Fotod kihelkondade kaupa")
+ 
+    # ── Abitunktsioon: GeoJSON centroidid klikitava zoom'i jaoks ─────────────
+ 
+    @st.cache_data
+    def geojson_centroids(geojson):
+        """Arvuta iga kihelkonna centroid GeoJSON geometriast."""
+        result = {}
+        if not geojson or "features" not in geojson:
+            return result
+        for feature in geojson["features"]:
+            name = feature["properties"].get("KIHELKOND", "")
+            geom = feature.get("geometry", {})
+            coords_all = []
+            if geom.get("type") == "Polygon":
+                coords_all = geom["coordinates"][0]
+            elif geom.get("type") == "MultiPolygon":
+                for poly in geom["coordinates"]:
+                    coords_all.extend(poly[0])
+            if coords_all and name:
+                lons = [c[0] for c in coords_all if isinstance(c, (list, tuple)) and len(c) >= 2]
+                lats = [c[1] for c in coords_all if isinstance(c, (list, tuple)) and len(c) >= 2]
+                if lons and lats:
+                    result[name] = (sum(lats) / len(lats), sum(lons) / len(lons))
+        return result
+ 
+    # ── Andmete ettevalmistus ─────────────────────────────────────────────────
+ 
+    geojson = load_geojson("kih1922_region.json")
+    centroids = geojson_centroids(geojson) if geojson else {}
+    geojson_names = set(centroids.keys())
+ 
+    # Kihelkond_kaart veerg kattub GeoJSON-iga otse — kasuta seda
+    df_map_src = df[
+        df["kihelkond_kaart"].notna() &
+        ~df["kihelkond_kaart"].astype(str).str.lower().isin(["teadmata", "välismaa"])
+    ].copy()
+ 
+    # Loenda fotosid kihelkonna_kaart järgi
+    kihel_counts = (
+        df_map_src.groupby("kihelkond_kaart")
+        .size()
+        .reset_index(name="Fotode arv")
+        .rename(columns={"kihelkond_kaart": "kaardi_piirkond"})
+    )
+ 
+    # Lisa koordinaadid kp tabelist (linnade jaoks jms)
+    # Normaliseeri kp nimed: eemalda " khk." lõpust, et leida GeoJSON-is mitteleiduvaid
+    kp_norm = kihelkonnad_kp.copy()
+    kp_col = kp_norm.columns[0]  # "Kihelkond või linn"
+    kp_norm = kp_norm.rename(columns={kp_col: "kaardi_piirkond"})
+ 
+    # Kihelkondadele, mis on GeoJSON-is, kasuta centroidi (täpsem)
+    # Linnadele jms kasuta kp tabeli koordinaate
+    kp_extra = kp_norm[
+        ~kp_norm["kaardi_piirkond"]
+        .str.replace(r"\s*khk\.$", "", regex=True)
+        .str.strip()
+        .isin(geojson_names)
+    ][["kaardi_piirkond", "latitude", "longitude"]].copy()
+ 
+    # Ühenda loendustabel extra-koordinaatidega (linnad jms)
+    kihel_with_coords = kihel_counts.merge(kp_extra, on="kaardi_piirkond", how="left")
+ 
+    # Jaga kaheks: GeoJSON-is olevad (choropleth) ja mitte (markerid)
+    df_geo = kihel_counts[kihel_counts["kaardi_piirkond"].isin(geojson_names)].copy()
+    df_markers = kihel_with_coords[
+        ~kihel_with_coords["kaardi_piirkond"].isin(geojson_names) &
+        kihel_with_coords["latitude"].notna() &
+        kihel_with_coords["longitude"].notna()
+    ].copy()
+ 
+    # ── Ülevaatekaart ─────────────────────────────────────────────────────────
+ 
+    if geojson and not df_geo.empty:
+        fig_main = px.choropleth_mapbox(
+            df_geo,
+            geojson=geojson,
+            locations="kaardi_piirkond",
+            featureidkey="properties.KIHELKOND",
+            color="Fotode arv",
+            color_continuous_scale="YlOrRd",
+            hover_name="kaardi_piirkond",
+            hover_data={"Fotode arv": True},
+            mapbox_style="open-street-map",
+            zoom=6.2,
+            center={"lat": 58.7, "lon": 25.0},
+            opacity=0.65,
+            title="Kliki kihelkonnal detailvaate avamiseks",
         )
-
-        if not kihelkonnad_kp.empty and {"kaardi_piirkond", "latitude", "longitude"}.issubset(kihelkonnad_kp.columns):
-            kihel_map = kihel_counts.merge(
-                kihelkonnad_kp[["kaardi_piirkond", "latitude", "longitude"]],
-                on="kaardi_piirkond", how="left"
-            )
-        else:
-            kihel_map = kihel_counts.copy()
-
-        geojson = load_geojson("kih1922_region.json")
-        geojson_names = extract_geojson_feature_names(geojson, "KIHELKOND") if geojson else set()
-
-        df_geo = kihel_map[kihel_map["kaardi_piirkond"].isin(geojson_names)].copy()
-        df_missing = kihel_map[
-            ~kihel_map["kaardi_piirkond"].isin(geojson_names) &
-            kihel_map["latitude"].notna() & kihel_map["longitude"].notna()
+        fig_main = lisa_piirjooned(fig_main, geojson, color="rgba(60,60,60,0.5)", width=0.8)
+ 
+        # Lisa linnad ja muud kohad markeritena
+        if not df_markers.empty:
+            marker_sizes = (df_markers["Fotode arv"] / df_markers["Fotode arv"].max() * 25 + 8).clip(8, 35)
+            fig_main.add_trace(go.Scattermapbox(
+                lat=df_markers["latitude"],
+                lon=df_markers["longitude"],
+                mode="markers+text",
+                text=df_markers["kaardi_piirkond"],
+                textposition="top center",
+                marker=dict(
+                    size=marker_sizes,
+                    color=df_markers["Fotode arv"],
+                    colorscale="YlOrRd",
+                    cmin=df_geo["Fotode arv"].min(),
+                    cmax=df_geo["Fotode arv"].max(),
+                    opacity=0.85,
+                ),
+                customdata=df_markers[["kaardi_piirkond", "Fotode arv"]].values,
+                hovertemplate="<b>%{customdata[0]}</b><br>Fotode arv: %{customdata[1]}<extra></extra>",
+                showlegend=False,
+            ))
+ 
+        fig_main.update_layout(
+            height=500,
+            margin={"r": 0, "t": 40, "l": 0, "b": 0},
+            coloraxis_colorbar=dict(title="Fotode arv"),
+        )
+ 
+        # Klikitav kaart — clickData kaudu
+        clicked = st.plotly_chart(
+            fig_main,
+            use_container_width=True,
+            on_select="rerun",
+            key="main_map",
+        )
+ 
+        # Loe kliki tulemus
+        val_kihel = None
+        if clicked and clicked.get("selection"):
+            sel = clicked["selection"]
+            # Choropleth klikk
+            points = sel.get("points", [])
+            if points:
+                loc = points[0].get("location") or points[0].get("customdata", [None])[0]
+                if loc:
+                    val_kihel = str(loc)
+ 
+    else:
+        st.info("GeoJSON andmeid ei leitud või kihelkonnaandmed puuduvad.")
+        val_kihel = None
+ 
+    # ── Manuaalne valik (ka ilma klikita) ────────────────────────────────────
+ 
+    kihel_valikud = sorted(
+        set(kihel_counts["kaardi_piirkond"].dropna().astype(str).tolist()) |
+        set(df_markers["kaardi_piirkond"].dropna().astype(str).tolist() if not df_markers.empty else [])
+    )
+ 
+    col_sel, col_reset = st.columns([4, 1])
+    with col_sel:
+        val_kihel_select = st.selectbox(
+            "Vali või otsi piirkond",
+            ["—"] + kihel_valikud,
+            index=(["—"] + kihel_valikud).index(val_kihel) if val_kihel in kihel_valikud else 0,
+            key="kihel_selectbox",
+        )
+    with col_reset:
+        st.write("")
+        if st.button("✕ Tühjenda", use_container_width=True):
+            val_kihel = None
+            val_kihel_select = "—"
+ 
+    # Kasuta kas klikki või käsitsi valikut
+    aktiivselt_valitud = val_kihel if val_kihel else (val_kihel_select if val_kihel_select != "—" else None)
+ 
+    # ── Detailvaade ───────────────────────────────────────────────────────────
+ 
+    if aktiivselt_valitud:
+        st.divider()
+        st.subheader(f"📍 {aktiivselt_valitud}")
+ 
+        # Filtreeri selle piirkonna fotod
+        df_detail = df[df["kihelkond_kaart"].astype(str) == aktiivselt_valitud].copy()
+ 
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Fotosid", len(df_detail))
+        coords_ok = df_detail["lõplik_latitude"].notna() if "lõplik_latitude" in df_detail.columns else df_detail["latitude"].notna() if "latitude" in df_detail.columns else pd.Series(False, index=df_detail.index)
+        k2.metric("Koordinaatidega", int(coords_ok.sum()))
+        k3.metric(
+            "Ajavahemik",
+            (f"{int(df_detail['Aasta'].min())}–{int(df_detail['Aasta'].max())}"
+             if "Aasta" in df_detail.columns and df_detail["Aasta"].notna().any()
+             else "?")
+        )
+        k4.metric(
+            "Fotograafe",
+            df_detail["Fotograaf"].nunique() if "Fotograaf" in df_detail.columns else "?"
+        )
+ 
+        # Detailkaart: ainult fotopunktid open-street-map taustal
+        # Kasuta lõplik_latitude/longitude kui olemas, muidu latitude/longitude
+        lat_col = "lõplik_latitude" if "lõplik_latitude" in df_detail.columns else "latitude"
+        lon_col = "lõplik_longitude" if "lõplik_longitude" in df_detail.columns else "longitude"
+ 
+        df_pts = df_detail[
+            df_detail[lat_col].notna() & df_detail[lon_col].notna()
         ].copy()
-
-        if geojson and not df_geo.empty:
-            fig = px.choropleth_mapbox(
-                df_geo, geojson=geojson, locations="kaardi_piirkond",
-                featureidkey="properties.KIHELKOND", color="Fotode arv",
-                color_continuous_scale="YlOrRd", hover_name="kaardi_piirkond",
-                hover_data={"Fotode arv": True}, mapbox_style="open-street-map",
-                zoom=6, center={"lat": 58.7, "lon": 25.0}, opacity=0.65,
-                title="Vali piirkond alt detailvaateks",
-            )
-            fig = lisa_piirjooned(fig, geojson)
-            fig = lisa_puuduvad_keskpunktid(fig, df_missing)
-            fig.update_layout(height=480, margin={"r": 0, "t": 40, "l": 0, "b": 0})
-            st.plotly_chart(fig, use_container_width=True)
-
-        elif not kihel_map.empty and {"latitude", "longitude"}.issubset(kihel_map.columns):
-            kihel_pts = kihel_map.dropna(subset=["latitude", "longitude"])
-            if not kihel_pts.empty:
-                fig = px.scatter_mapbox(
-                    kihel_pts, lat="latitude", lon="longitude",
-                    size="Fotode arv", color="Fotode arv",
-                    hover_name="kaardi_piirkond",
-                    hover_data={"Fotode arv": True, "latitude": False, "longitude": False},
-                    color_continuous_scale="YlOrRd", size_max=45, zoom=6,
-                    center={"lat": 58.7, "lon": 25.0}, mapbox_style="open-street-map",
-                    title="Vali piirkond alt detailvaateks",
-                )
-                fig.update_traces(text=kihel_pts["kaardi_piirkond"], textposition="top center")
-                fig.update_layout(height=480, margin={"r": 0, "t": 40, "l": 0, "b": 0})
-                st.plotly_chart(fig, use_container_width=True)
+        df_pts = df_pts.rename(columns={lat_col: "_lat", lon_col: "_lon"})
+ 
+        if not df_pts.empty:
+            # Zoom ja center kihelkonna centroidist (täpsem kui andmepunktidest)
+            if aktiivselt_valitud in centroids:
+                center_lat, center_lon = centroids[aktiivselt_valitud]
+                zoom_level = 9
             else:
-                st.info("Kaardi jaoks ei leitud piisavalt piirkonnaandmeid.")
+                center_lat = df_pts["_lat"].mean()
+                center_lon = df_pts["_lon"].mean()
+                zoom_level = 9
+ 
+            hover_cols = {c: True for c in ["Aasta", "Fotograaf", "Žanr", "Sisu kirjeldus"]
+                         if c in df_pts.columns}
+            hover_cols["_lat"] = False
+            hover_cols["_lon"] = False
+ 
+            color_col = "lõplik_täpsus" if "lõplik_täpsus" in df_pts.columns else None
+ 
+            fig_detail = px.scatter_mapbox(
+                df_pts,
+                lat="_lat",
+                lon="_lon",
+                hover_name="Sisu kirjeldus" if "Sisu kirjeldus" in df_pts.columns else None,
+                hover_data=hover_cols,
+                color=color_col,
+                mapbox_style="open-street-map",
+                zoom=zoom_level,
+                center={"lat": center_lat, "lon": center_lon},
+                title=f"Koordinaatidega fotod – {aktiivselt_valitud}",
+            )
+ 
+            # Lisa kihelkonna piirjoon detailkaardile
+            if geojson:
+                detail_geojson = {
+                    "type": "FeatureCollection",
+                    "features": [
+                        f for f in geojson["features"]
+                        if f["properties"].get("KIHELKOND") == aktiivselt_valitud
+                    ]
+                }
+                fig_detail = lisa_piirjooned(
+                    fig_detail, detail_geojson, color="rgba(40,40,40,0.8)", width=2
+                )
+ 
+            fig_detail.update_traces(marker=dict(size=9, opacity=0.8))
+            fig_detail.update_layout(
+                height=450,
+                margin={"r": 0, "t": 40, "l": 0, "b": 0},
+            )
+            st.plotly_chart(fig_detail, use_container_width=True)
+            st.caption(f"Koordinaatidega fotosid: {len(df_pts)} / {len(df_detail)}")
+ 
         else:
-            st.info("Kihelkonna geojsoni ega keskpunktiandmeid ei leitud piisavalt.")
-
-        st.subheader("Piirkonna detailvaade")
-        kihel_valikud = sorted(kihel_map["kaardi_piirkond"].dropna().astype(str).unique().tolist()) if not kihel_map.empty else []
-        val_kihel = st.selectbox("Vali piirkond", ["—"] + kihel_valikud)
-
-        if val_kihel != "—":
-            df_kihel = df[df[kihel_veerg].astype(str) == val_kihel]
-            k1, k2, k3 = st.columns(3)
-            k1.metric("Fotosid", len(df_kihel))
-            k2.metric(
-                "Koordinaatidega",
-                df_kihel["koordinaadid_leitud"].astype(str).eq("jah").sum() if "koordinaadid_leitud" in df_kihel.columns else 0
+            st.info("Sellel piirkonnal koordinaatidega fotosid ei ole.")
+ 
+        # Lisainfo: fotograafid ja märksõnad
+        col_kd1, col_kd2 = st.columns(2)
+        with col_kd1:
+            if "Fotograaf" in df_detail.columns:
+                ft = df_detail["Fotograaf"].value_counts().head(8).reset_index()
+                ft.columns = ["Fotograaf", "Arv"]
+                st.markdown("**Fotograafid**")
+                st.dataframe(ft, hide_index=True, use_container_width=True)
+        with col_kd2:
+            if not marksoned.empty and "PID" in marksoned.columns and "Märksõna" in marksoned.columns:
+                ms_det = (
+                    marksoned[marksoned["PID"].isin(df_detail["PID"])]["Märksõna"]
+                    .value_counts().head(8).reset_index()
+                )
+                ms_det.columns = ["Märksõna", "Arv"]
+                st.markdown("**Top märksõnad**")
+                st.dataframe(ms_det, hide_index=True, use_container_width=True)
+ 
+        # Fotode tabel
+        with st.expander("Vaata kõiki selle piirkonna fotosid"):
+            detail_cols = [c for c in [
+                "PID", "Aasta", "Fotograaf", "Žanr",
+                "Sisu kirjeldus", "Koht täpsemalt", "failinimi"
+            ] if c in df_detail.columns]
+            st.dataframe(
+                df_detail[detail_cols].head(500),
+                use_container_width=True,
+                hide_index=True
             )
-            k3.metric(
-                "Ajavahemik",
-                (f"{int(df_kihel['Aasta'].min()) if df_kihel['Aasta'].notna().any() else '?'}–"
-                 f"{int(df_kihel['Aasta'].max()) if df_kihel['Aasta'].notna().any() else '?'}")
-                if "Aasta" in df_kihel.columns else "?"
-            )
-
-            naita_fotopunkte(df_kihel, f"Fotod – {val_kihel}", load_geojson, lisa_asustus_piirid=True)
-
-            col_kd1, col_kd2 = st.columns(2)
-            with col_kd1:
-                if "Fotograaf" in df_kihel.columns:
-                    ft = df_kihel["Fotograaf"].value_counts().head(8).reset_index()
-                    if len(ft.columns) == 2:
-                        ft.columns = ["Fotograaf", "Arv"]
-                    st.markdown("**Fotograafid**")
-                    st.dataframe(ft, hide_index=True, use_container_width=True)
-            with col_kd2:
-                if not marksoned.empty and "PID" in marksoned.columns and "Märksõna" in marksoned.columns:
-                    ms_kihel = (
-                        marksoned[marksoned["PID"].isin(df_kihel["PID"])]["Märksõna"]
-                        .value_counts().head(8).reset_index()
-                    )
-                    if len(ms_kihel.columns) == 2:
-                        ms_kihel.columns = ["Märksõna", "Arv"]
-                    st.markdown("**Top märksõnad**")
-                    st.dataframe(ms_kihel, hide_index=True, use_container_width=True)
-
-        puuduvad_nimed = []
-        if not kihel_map.empty and {"latitude", "longitude"}.issubset(kihel_map.columns):
-            puuduvad_nimed = (
-                kihel_map[kihel_map["latitude"].isna() | kihel_map["longitude"].isna()]
-                ["kaardi_piirkond"].dropna().astype(str).tolist()
-            )
-
-        if puuduvad_nimed:
-            st.caption("⚠️ Keskpunkt puudub: " + ", ".join(sorted(puuduvad_nimed[:20]))
-                       + (" ..." if len(puuduvad_nimed) > 20 else ""))
-        else:
-            st.caption(f"ℹ️ Kaardil on {len(kihel_map)} piirkonda. Geojsonist puudu olevad piirkonnad lisatakse keskpunktmarkeritena.")
-
-
+            if len(df_detail) > 500:
+                st.caption(f"Näidatakse 500 / {len(df_detail)} reast.")
+ 
+    else:
+        st.caption(
+            f"Kaardil on {len(df_geo)} kihelkonda ja {len(df_markers)} muud piirkonda. "
+            "Kliki kihelkonnal või vali rippmenüüst detailvaate avamiseks."
+        )
+ 
 # ══════════════════ TAB 2 – STATISTIKA ═══════════════════════════════════════
 with tab2:
     col_left, col_right = st.columns(2)
