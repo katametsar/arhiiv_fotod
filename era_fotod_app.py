@@ -2764,7 +2764,8 @@ with tab6:
         csv = df_show[show_cols].to_csv(index=False).encode("utf-8")
         st.download_button("⬇️ Lae alla CSV", data=csv, file_name="era_fotod_filteeritud.csv", mime="text/csv")
     else:
-        st.info("Vali vähemalt üks veerg.")        for fname in os.listdir(BASE_DIR):
+        st.info("Vali vähemalt üks veerg.")        
+        for fname in os.listdir(BASE_DIR):
             if wanted in normalize_filename_for_match(fname):
                 return os.path.join(BASE_DIR, fname)
 
