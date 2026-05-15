@@ -1589,8 +1589,8 @@ with tab6:
         st.download_button("⬇️ Lae alla CSV", data=csv, file_name="era_fotod_filteeritud.csv", mime="text/csv")
     else:
         st.info("Vali vähemalt üks veerg.")
-            if wanted in normalize_filename_for_match(fname):
-                return os.path.join(BASE_DIR, fname)
+        if wanted in normalize_filename_for_match(fname):
+            return os.path.join(BASE_DIR, fname)
     return None
 
 
