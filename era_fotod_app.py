@@ -888,16 +888,27 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
 
 # ══════════════════ TAB 1 – KAART ════════════════════════════════════════════
 with tab1:
+
+    st.markdown("""
+    Kaart visualiseerib ERA fotoarhiivi ruumilisi mustreid ajalooliste kihelkondade lõikes.  
+    Tumedamad piirkonnad tähistavad suurema fotode arvuga kihelkondi.
+
+    Kihelkonnale klõpsates avaneb detailvaade koos fotode punktkaardi, fotograafide, märksõnade ja piirkonna fotode loeteluga.
+    """)
+
     st.subheader("Fotod kihelkondade kaupa")
+
 
     @st.cache_data
     def get_centroids(_geojson):
+
         result = {}
 
         if not _geojson or "features" not in _geojson:
             return result
 
         for feature in _geojson["features"]:
+
             name = feature.get("properties", {}).get("KIHELKOND", "")
             geom = feature.get("geometry", {})
 
@@ -912,6 +923,7 @@ with tab1:
                         coords_all.extend(poly[0])
 
             if coords_all and name:
+
                 lons = [c[0] for c in coords_all if len(c) >= 2]
                 lats = [c[1] for c in coords_all if len(c) >= 2]
 
@@ -941,21 +953,21 @@ with tab1:
     if st.session_state["kaart_vaade"] == "overview":
 
         df_map_src = df[
-            df["kihelkond_kaart"].notna()
-            & ~df["kihelkond_kaart"].astype(str).str.lower().isin(
-                ["teadmata", "välismaa"]
+            df["kaardi_piirkond"].notna()
+            & ~df["kaardi_piirkond"].astype(str).str.lower().isin(
+                ["teadmata", "välismaa", "välismaa,"]
             )
         ].copy()
 
         kihel_counts = (
             df_map_src
-            .groupby("kihelkond_kaart")
+            .groupby("kaardi_piirkond")
             .size()
             .reset_index(name="Fotode arv")
-            .rename(columns={"kihelkond_kaart": "kaardi_piirkond"})
         )
 
         if kihel_counts.empty:
+
             st.info("Praeguse filtriga kihelkondi ei leitud.")
 
         else:
@@ -1003,11 +1015,12 @@ with tab1:
             )
 
             try:
+
                 points = event.get("selection", {}).get("points", [])
 
                 if points:
-                    clicked = points[0]
 
+                    clicked = points[0]
                     selected_kihel = None
 
                     if "customdata" in clicked:
@@ -1017,8 +1030,10 @@ with tab1:
                         selected_kihel = clicked["location"]
 
                     if selected_kihel:
+
                         st.session_state["valitud_kihelkond"] = selected_kihel
                         st.session_state["kaart_vaade"] = "detail"
+
                         st.rerun()
 
             except Exception:
@@ -1042,14 +1057,16 @@ with tab1:
             st.rerun()
 
         if st.button("← Tagasi üldkaardile"):
+
             st.session_state["kaart_vaade"] = "overview"
             st.session_state["valitud_kihelkond"] = None
+
             st.rerun()
 
         st.subheader(f"📍 {val_kihel}")
 
         df_detail = df[
-            df["kihelkond_kaart"].astype(str) == val_kihel
+            df["kaardi_piirkond"].astype(str) == val_kihel
         ].copy()
 
         lat_col = (
@@ -1111,6 +1128,7 @@ with tab1:
 
             if val_kihel in centroids:
                 center_lat, center_lon = centroids[val_kihel]
+
             else:
                 center_lat = df_pts["_lat"].mean()
                 center_lon = df_pts["_lon"].mean()
@@ -1173,7 +1191,7 @@ with tab1:
                     width=2
                 )
 
-            # asustusüksused
+            # asustusüksuste piirid
             geojson_ay = load_geojson("asustusyksus_small.geojson")
 
             if isinstance(geojson_ay, dict):
@@ -1193,6 +1211,7 @@ with tab1:
                             continue
 
                         try:
+
                             lons = [
                                 c[0]
                                 for c in coords
@@ -1249,6 +1268,7 @@ with tab1:
             )
 
         else:
+
             st.info(
                 "Sellel piirkonnal koordinaatidega fotosid ei ole."
             )
@@ -1304,7 +1324,6 @@ with tab1:
                     use_container_width=True
                 )
 
-        # FOTO TABEL
         with st.expander(
             "Vaata kõiki fotosid sellest piirkonnast"
         ):
@@ -1329,6 +1348,7 @@ with tab1:
             )
 
             if len(df_detail) > 500:
+
                 st.caption(
                     f"Näidatakse 500 / {len(df_detail)} reast."
                 )
