@@ -525,7 +525,7 @@ def plot_network_from_edges(edges_df, source_col, target_col, weight_col, title,
 @st.cache_data
 def load_data():
     xlsx_path = None
-        for fname in ["ERA_fotod_piiridega.xlsx", "ERA_fotod_250426.xlsx"]:
+    for fname in ["ERA_fotod_piiridega.xlsx", "ERA_fotod_250426.xlsx"]:
         path = os.path.join(BASE_DIR, fname)
         if os.path.exists(path):
             xlsx_path = path
