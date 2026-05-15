@@ -890,8 +890,8 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
 with tab1:
 
     st.markdown("""
-    Kaart visualiseerib ERA fotoarhiivi ruumilisi mustreid ajalooliste kihelkondade lõikes.  
-    Tumedamad piirkonnad tähistavad suurema fotode arvuga kihelkondi.
+    Kaart visualiseerib Eesti Rahvaluule Arhiivi fotokogu esimese 10 000 foto ruumilisi mustreid ajalooliste kihelkondade lõikes.  
+    Heledamad kollakad piirkonnad tähistavad suurema fotode arvuga kihelkondi.
 
     Kihelkonnale või eraldi punktina kuvatud piirkonnale klõpsates avaneb detailvaade koos fotode punktkaardi, fotograafide, märksõnade ja piirkonna fotode loeteluga.
     """)
@@ -909,7 +909,6 @@ with tab1:
         for feature in _geojson["features"]:
             name = feature.get("properties", {}).get("KIHELKOND", "")
             geom = feature.get("geometry", {})
-
             coords_all = []
 
             if geom.get("type") == "Polygon":
@@ -956,6 +955,12 @@ with tab1:
             return None
 
 
+    def clean_display_series(series):
+        out = series.dropna().astype(str).str.strip()
+        out = out[~out.str.lower().isin(["", "nan", "none", "null", "<na>"])]
+        return out
+
+
     geojson = load_geojson("kih1922_region.json")
     centroids = get_centroids(geojson) if geojson else {}
 
@@ -982,7 +987,7 @@ with tab1:
             df_map_src = df[
                 df["kaardi_piirkond"].notna()
                 & ~df["kaardi_piirkond"].astype(str).str.lower().isin(
-                    ["teadmata", "välismaa", "välismaa,"]
+                    ["teadmata", "välismaa", "välismaa,", "nan", "none", "null", "<na>"]
                 )
             ].copy()
 
@@ -1013,7 +1018,7 @@ with tab1:
                 ~kihel_counts["kaardi_piirkond"].isin(geo_names)
             ].copy()
 
-            # Puuduvad piirkonnad punktidena:
+            # GeoJSON-ist puuduvad piirkonnad punktidena:
             # 1) kui kihelkond_keskpunktid tabelis on keskpunkt, kasuta seda
             # 2) muidu arvuta piirkonna fotode koordinaatide mediaan
             missing_points = pd.DataFrame()
@@ -1072,14 +1077,14 @@ with tab1:
                     locations="kaardi_piirkond",
                     featureidkey="properties.KIHELKOND",
                     color="Fotode arv",
-                    color_continuous_scale="YlOrRd",
+                    color_continuous_scale="Viridis",
                     hover_name="kaardi_piirkond",
                     hover_data={"Fotode arv": True},
                     custom_data=["kaardi_piirkond"],
                     mapbox_style="open-street-map",
                     zoom=6.2,
                     center={"lat": 58.7, "lon": 25.0},
-                    opacity=0.65,
+                    opacity=0.72,
                 )
 
                 fig_main = lisa_piirjooned(
@@ -1089,7 +1094,6 @@ with tab1:
                     width=0.8
                 )
 
-                # GeoJSON-ist puuduvad piirkonnad punktidena
                 if not missing_points.empty:
                     fig_main.add_trace(
                         go.Scattermapbox(
@@ -1100,18 +1104,17 @@ with tab1:
                             textposition="top center",
                             customdata=missing_points[["kaardi_piirkond"]],
                             marker=dict(
-                                size=missing_points["Fotode arv"].clip(lower=12, upper=34),
-                                color="#ff2d55",
-                                opacity=0.9
+                                size=missing_points["Fotode arv"].clip(lower=13, upper=36),
+                                color="#FFD400",
+                                opacity=0.95
                             ),
                             hovertext=(
                                 missing_points["kaardi_piirkond"].astype(str)
                                 + "<br>Fotode arv: "
                                 + missing_points["Fotode arv"].astype(str)
-                                + "<br>Piirkond puudub kihelkonna GeoJSON-ist"
                             ),
                             hoverinfo="text",
-                            name="Punktina kuvatud piirkonnad",
+                            name="Eraldi punktina kuvatud piirkonnad",
                             showlegend=True,
                         )
                     )
@@ -1146,22 +1149,9 @@ with tab1:
                     st.rerun()
 
                 st.caption(
-                    f"Kaardil on {len(kihel_counts_geo)} GeoJSON-iga sobitunud kihelkonda "
-                    f"ja {len(missing_points)} punktina kuvatud piirkonda."
+                    f"Kaardil on {len(kihel_counts_geo)} kihelkonda ja "
+                    f"{len(missing_points)} eraldi punktina kuvatud piirkonda."
                 )
-
-                if not missing_geo.empty:
-                    with st.expander("Piirkonnad, mida kihelkonna polügoonina ei kuvata"):
-                        st.caption(
-                            "Need piirkonnad on andmestikus olemas, aga neid ei leitud kasutatava "
-                            "GeoJSON-i properties.KIHELKOND nimede hulgast. Seetõttu kuvatakse need "
-                            "kaardil eraldi punktidena."
-                        )
-                        st.dataframe(
-                            missing_geo.sort_values("Fotode arv", ascending=False),
-                            use_container_width=True,
-                            hide_index=True
-                        )
 
 
     # ════════════════════════════════════════════════════════════════════════
@@ -1224,12 +1214,11 @@ with tab1:
             else "?"
         )
 
-        k4.metric(
-            "Fotograafe",
-            df_detail["Fotograaf"].nunique()
-            if "Fotograaf" in df_detail.columns
-            else "?"
-        )
+        if "Fotograaf" in df_detail.columns:
+            ft_clean = clean_display_series(df_detail["Fotograaf"])
+            k4.metric("Fotograafe", ft_clean.nunique())
+        else:
+            k4.metric("Fotograafe", "?")
 
         df_pts = df_detail[coords_ok].copy()
 
@@ -1248,16 +1237,12 @@ with tab1:
                 center_lat = df_pts["_lat"].median()
                 center_lon = df_pts["_lon"].median()
 
-            hover_data = {
-                c: True
-                for c in [
-                    "Aasta",
-                    "Fotograaf",
-                    "Žanr",
-                    "lõplik_täpsus"
-                ]
-                if c in df_pts.columns
-            }
+            hover_data = {}
+
+            for c in ["Aasta", "Fotograaf", "Žanr", "lõplik_täpsus"]:
+                if c in df_pts.columns:
+                    df_pts[c] = df_pts[c].replace(["nan", "None", "null", "", "<NA>"], pd.NA)
+                    hover_data[c] = True
 
             hover_data["_lat"] = False
             hover_data["_lon"] = False
@@ -1283,12 +1268,11 @@ with tab1:
             fig_detail.update_traces(
                 marker=dict(
                     size=10,
-                    opacity=0.9,
-                    color="#ff2d55"
+                    opacity=0.95,
+                    color="#FFD400"
                 )
             )
 
-            # Kui valitud piirkond on GeoJSON-is olemas, lisa piirjoon
             if geojson and val_kihel in centroids:
                 detail_features = [
                     f for f in geojson["features"]
@@ -1308,7 +1292,6 @@ with tab1:
                         width=2
                     )
 
-            # Asustusüksuste piirid
             geojson_ay = load_geojson("asustusyksus_small.geojson")
 
             if isinstance(geojson_ay, dict) and "features" in geojson_ay:
@@ -1386,8 +1369,10 @@ with tab1:
 
         with col1:
             if "Fotograaf" in df_detail.columns:
+                ft_source = clean_display_series(df_detail["Fotograaf"])
+
                 ft = (
-                    df_detail["Fotograaf"]
+                    ft_source
                     .value_counts()
                     .head(8)
                     .reset_index()
@@ -1397,11 +1382,14 @@ with tab1:
 
                 st.markdown("### Fotograafid")
 
-                st.dataframe(
-                    ft,
-                    hide_index=True,
-                    use_container_width=True
-                )
+                if not ft.empty:
+                    st.dataframe(
+                        ft,
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                else:
+                    st.info("Fotograafi andmeid ei ole.")
 
         with col2:
             if (
@@ -1410,10 +1398,14 @@ with tab1:
                 and "Märksõna" in marksoned.columns
             ):
 
+                ms_source = marksoned[
+                    marksoned["PID"].isin(df_detail["PID"])
+                ]["Märksõna"]
+
+                ms_source = clean_display_series(ms_source)
+
                 ms_det = (
-                    marksoned[
-                        marksoned["PID"].isin(df_detail["PID"])
-                    ]["Märksõna"]
+                    ms_source
                     .value_counts()
                     .head(8)
                     .reset_index()
@@ -1423,11 +1415,14 @@ with tab1:
 
                 st.markdown("### Top märksõnad")
 
-                st.dataframe(
-                    ms_det,
-                    hide_index=True,
-                    use_container_width=True
-                )
+                if not ms_det.empty:
+                    st.dataframe(
+                        ms_det,
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                else:
+                    st.info("Märksõnu ei ole.")
 
         with st.expander("Vaata kõiki fotosid sellest piirkonnast"):
 
@@ -1444,8 +1439,17 @@ with tab1:
                 if c in df_detail.columns
             ]
 
+            df_table = df_detail.copy()
+
+            for col in ["Aasta", "Fotograaf", "Žanr", "Sisu kirjeldus", "Koht täpsemalt"]:
+                if col in df_table.columns:
+                    df_table[col] = df_table[col].replace(
+                        ["nan", "None", "null", "", "<NA>"],
+                        pd.NA
+                    )
+
             st.dataframe(
-                df_detail[detail_cols].head(500),
+                df_table[detail_cols].head(500),
                 use_container_width=True,
                 hide_index=True,
             )
