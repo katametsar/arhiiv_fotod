@@ -3462,11 +3462,23 @@ with tab6:
     st.markdown(f"Näidatakse **{len(df_show):,}** rida")
 
     if show_cols:
-        st.dataframe(df_show[show_cols].head(500), use_container_width=True, height=420)
-        if len(df_show) > 500:
+        st.dataframe(
+            df_show[show_cols].head(500),
+            use_container_width=True,
+            height=420
+        )
+
+    if len(df_show) > 500:
             st.caption("ℹ️ Tabelis on esimesed 500 rida. Kitsenda filtritega.")
+
         csv = df_show[show_cols].to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Lae alla CSV", data=csv,
-                           file_name="era_fotod_filteeritud.csv", mime="text/csv")
+
+        st.download_button(
+            "⬇️ Lae alla CSV",
+            data=csv,
+            file_name="era_fotod_filteeritud.csv",
+            mime="text/csv"
+        )
+
     else:
         st.info("Vali vähemalt üks veerg.")
